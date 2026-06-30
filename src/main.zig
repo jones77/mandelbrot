@@ -210,7 +210,7 @@ pub fn main() anyerror!void {
     var image = rl.genImageColor(screen_w, screen_h, .black);
     defer rl.unloadImage(image);
 
-    var texture = rl.loadTextureFromImage(image);
+    var texture = try rl.loadTextureFromImage(image);
     defer rl.unloadTexture(texture);
 
     var drag = struct {
@@ -244,7 +244,7 @@ pub fn main() anyerror!void {
             rl.unloadImage(image);
 
             image = rl.genImageColor(screen_w, screen_h, .black);
-            texture = rl.loadTextureFromImage(image);
+            texture = try rl.loadTextureFromImage(image);
 
             renderMandelbrot(&image, view);
             rl.updateTexture(texture, image.data);
@@ -366,7 +366,7 @@ pub fn main() anyerror!void {
         var buf: [256]u8 = undefined;
         const center_text = std.fmt.bufPrintZ(
             &buf,
-            "Center: ({d:.8}, {d:.8})  |  Range: {d:.4e}  |  Iters: {d}",
+            "Center: ({d:.8}, {d:.8})  |  Range: {e:.4}  |  Iters: {d}",
             .{ view.center_x, view.center_y, view.range, view.max_iters },
         ) catch unreachable;
 

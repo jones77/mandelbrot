@@ -1,6 +1,13 @@
 .{
-    .name = "mandelbrot",
+    .name = .mandelbrot,
     .version = "0.1.0",
+    .dependencies = .{
+        .raylib_zig = .{
+            .url = "git+https://github.com/raylib-zig/raylib-zig?ref=v5.6-dev#4b6a05cd102d51f00523dd5c5e18e628df359d20",
+            .hash = "raylib_zig-5.6.0-dev-KE8REKNmBQDek2Sz27ULioxYpY9IYR0K0CeIC-iJRLCI",
+        },
+    },
+    .fingerprint = 0x41bfed701afbbdbd,
     .paths = .{
         "build.zig",
         "build.zig.zon",

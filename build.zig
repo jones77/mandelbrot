@@ -4,27 +4,25 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable(.{
-        .name = "mandelbrot",
+    const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Use raylib-zig from the Zig package manager.
-    // Run `zig fetch --save` first to add the dependency to build.zig.zon.
     const raylib_dep = b.dependency("raylib_zig", .{
         .target = target,
         .optimize = optimize,
     });
 
-    const raylib_module = raylib_dep.module("raylib");
-    const raylib_artifact = raylib_dep.artifact("raylib");
+    exe_mod.addImport("raylib", raylib_dep.module("raylib"));
 
-    exe.root_module.addImport("raylib", raylib_module);
-    exe.root_module.linkLibrary(raylib_artifact);
+    const exe = b.addExecutable(.{
+        .name = "mandelbrot",
+        .root_module = exe_mod,
+    });
+    exe_mod.linkLibrary(raylib_dep.artifact("raylib"));
 
-    // ---- Install & run ----
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
