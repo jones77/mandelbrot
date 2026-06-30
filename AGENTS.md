@@ -122,6 +122,34 @@ interior detection but does not detail perturbation.  See K. I. Martin's
 pre-computing the reference orbit before spawnning render threads, and modifying
 `renderStrip` to accept the reference data.
 
+### f64 fallback for deep zooms (range < 1e-7)
+
+At range 1e-8 with a 900×800 window, the per-pixel step is ~1e-11.  f32
+has ~7 decimal digits, so coordinates at |c| ≈ 2 are rounded to ~2.4e-7 —
+far larger than the pixel step.  Adjacent pixels become indistinguishable
+and the image gets blocky.
+
+**Implementation:** compare `range / min(screen_w, screen_h)` against a
+threshold (≈ 2e-7).  Below it, use `f64` for the entire inner loop
+(original precision, half the SIMD width).  The `Coord` struct can be
+generic or replaced by raw `f64` scalars in an alternate hot path.
+
+### SIMD via @Vector
+
+The hot loop is trivially parallel across lanes.  Zig's `@Vector(4, f32)`
+lets NEON compute 4 pixels per instruction.  The main challenge is lane
+divergence — when one pixel escapes, its lane must be masked out so the
+other three continue.
+
+**Implementation sketch:**
+- Bundle `zx, zy, cx, cy, dx, dy` into `@Vector(4, f32)` groups.
+- Escape check: `escaped = zx*zx + zy*zy > 4.0` → `@reduce(.Or, escaped)`
+  to determine if any lane escaped.
+- Mask out escaped lanes by zeroing their coordinates (so |z| stays 0)
+  and track iteration count per lane.
+- Interior detection is trickier with divergence; may need per-lane state.
+- Expected gain: ~2× on M1 (4-wide NEON, but divergence hurts).
+
 Per the Chéritat document, the following visualization modes should be added.
 Each mode has a name, a short description, and a reference to the document section.
 
