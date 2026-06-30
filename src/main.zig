@@ -34,6 +34,7 @@ const PALETTE_SIZE: usize = 1024;
 const MAX_RENDER_THREADS: usize = 8;
 const RENDER_TIMEOUT_S: f64 = 30.0;
 const CARDIOID_Y_MAX: f64 = 3.0 * @sqrt(3.0) / 8.0;
+const INTERIOR_EPSILON_SQ: f64 = 1e-6; // derivative ≈ 0 → inside M
 
 // ===========================================================================
 // Types
@@ -193,20 +194,35 @@ fn renderStrip(ctx: *RenderStrip) void {
                 if ((cx + 1.0) * (cx + 1.0) + cy2 <= 0.0625) continue;
             }
 
-            var zx: f64 = 0.0;
-            var zy: f64 = 0.0;
+            // Start from z=c (not z=0) so we can track the derivative
+            // (P^n)'(c).  For points inside M the derivative shrinks
+            // toward zero — we detect that early and stop iterating.
+            var zx: f64 = cx;
+            var zy: f64 = cy;
+            var dx: f64 = 1.0;
+            var dy: f64 = 0.0;
             var iter: u32 = 0;
 
             // Using the while-else expression: `break` provides the smooth
             // iteration count on escape, `else` provides the limit when the
             // point never escapes (inside the set → leave black).
             const mu = while (iter < max_iters) : (iter += 1) {
+                // Derivative-based interior detection: (P^n)'(c) → 0.
+                if (dx * dx + dy * dy < INTERIOR_EPSILON_SQ) {
+                    break @as(f64, @floatFromInt(max_iters));
+                }
                 const zx2 = zx * zx;
                 const zy2 = zy * zy;
                 if (zx2 + zy2 > 4.0) {
                     const log_mag = 0.5 * @log(zx2 + zy2);
                     break @as(f64, @floatFromInt(iter)) + 1.0 - @log(log_mag) / @log(2.0);
                 }
+                // Update derivative BEFORE z (order matters).
+                const ndx = 2.0 * (zx * dx - zy * dy);
+                const ndy = 2.0 * (zx * dy + zy * dx);
+                dx = ndx;
+                dy = ndy;
+                // Update z.
                 zy = 2.0 * zx * zy + cy;
                 zx = zx2 - zy2 + cx;
             } else @as(f64, @floatFromInt(max_iters));
