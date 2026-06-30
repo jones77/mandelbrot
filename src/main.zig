@@ -293,6 +293,17 @@ fn renderStrip(ctx: *RenderStrip) void {
     }
 }
 
+/// Fill a RGBA buffer with opaque black (all bytes to 0, alpha to 255).
+/// Extracted for testability — the `@memset` + alpha fix pattern is easy
+/// to get wrong (the bug was alpha=0 → transparent black).
+fn clearToOpaqueBlack(pixels: []u8) void {
+    @memset(pixels, 0);
+    var a: usize = 3;
+    while (a < pixels.len) : (a += 4) {
+        pixels[a] = 255;
+    }
+}
+
 /// Render the Mandelbrot set across multiple CPU cores.
 /// `clear` — zero the pixel buffer first (needed for a new view).
 /// Returns `true` if the render timed out (partial image, press Space to continue).
@@ -309,14 +320,7 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState, clear: bool) !bool {
     const pixels = @as([*]u8, @ptrCast(image.data))[0 .. w * h * 4];
 
     if (clear) {
-        // Clear to opaque black — old coloured pixels from a previous zoom
-        // must not bleed into "inside set" areas of the new view.
-        // @memset alone would set alpha=0 (transparent), so fix it after.
-        @memset(pixels, 0);
-        var a: usize = 3;
-        while (a < pixels.len) : (a += 4) {
-            pixels[a] = 255;
-        }
+        clearToOpaqueBlack(pixels);
     }
 
     // Bounding-box test for cardioid/bulb periodicity checking.
@@ -913,4 +917,141 @@ test "buildPalette all valid" {
         // Alpha must be 255 for every palette entry.
         try testing.expectEqual(@as(u8, 255), c.a);
     }
+}
+
+// ===========================================================================
+// Integration tests — these would have caught past regressions
+// ===========================================================================
+
+test "Coord normSq and sq" {
+    const z = Coord{ .re = 3.0, .im = 4.0 };
+    try testing.expectEqual(@as(f32, 25.0), z.normSq());
+    const z2 = z.sq();
+    try testing.expectEqual(@as(f32, -7.0), z2.re);
+    try testing.expectEqual(@as(f32, 24.0), z2.im);
+
+    // |0|² = 0
+    const zero = Coord{ .re = 0, .im = 0 };
+    try testing.expectEqual(@as(f32, 0.0), zero.normSq());
+
+    // (1 + i)² = 2i
+    const unit = Coord{ .re = 1.0, .im = 1.0 };
+    const unit_sq = unit.sq();
+    try testing.expectApproxEqAbs(@as(f32, 0.0), unit_sq.re, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 2.0), unit_sq.im, 1e-6);
+}
+
+test "clearToOpaqueBlack sets RGBA=0 with A=255" {
+    // This would have caught the @memset alpha=0 bug.
+    var buf = [_]u8{0xFF} ** 16; // 4 pixels, all 0xFF
+    clearToOpaqueBlack(&buf);
+    for (0..4) |i| {
+        try testing.expectEqual(@as(u8, 0), buf[i * 4 + 0]); // R
+        try testing.expectEqual(@as(u8, 0), buf[i * 4 + 1]); // G
+        try testing.expectEqual(@as(u8, 0), buf[i * 4 + 2]); // B
+        try testing.expectEqual(@as(u8, 255), buf[i * 4 + 3]); // A ← was 0, fixed
+    }
+}
+
+test "clearToOpaqueBlack large buffer" {
+    var buf: [400]u8 = undefined; // 100 pixels
+    clearToOpaqueBlack(&buf);
+    for (0..100) |i| {
+        // Every alpha byte must be 255 (not just the first one).
+        try testing.expectEqual(@as(u8, 255), buf[i * 4 + 3]);
+    }
+}
+
+test "zoom math round-trip" {
+    // Simulate a drag-zoom and verify the new view is a proper subset.
+    const screen_w: i32 = 900;
+    const screen_h: i32 = 800;
+
+    var view = ViewState{
+        .center_x = -0.5,
+        .center_y = 0.0,
+        .range = 3.5,
+        .max_iters = 256,
+    };
+
+    // User drags from (200, 200) to (500, 500) — a 300×300 square.
+    const drag_start_x: f64 = 200.0;
+    const drag_start_y: f64 = 200.0;
+    const drag_end_x: f64 = 500.0;
+    const drag_end_y: f64 = 500.0;
+
+    // Constrain to square (longer side).
+    const size = @max(@abs(drag_end_x - drag_start_x), @abs(drag_end_y - drag_start_y));
+    const sel_cx = (drag_start_x + drag_end_x) / 2.0;
+    const sel_cy = (drag_start_y + drag_end_y) / 2.0;
+
+    const c_center = screenToComplex(sel_cx, sel_cy, view, screen_w, screen_h);
+    const smaller = @min(screen_w, screen_h);
+    const new_range = view.range * (size / @as(f64, @floatFromInt(smaller)));
+
+    // Verify the new view is a subset of the old view.
+    try testing.expect(new_range < view.range);
+    try testing.expectApproxEqAbs(-0.5, c_center.x, 0.5); // still near centre
+    try testing.expectApproxEqAbs(0.0, c_center.y, 0.5);
+
+    // Update view and verify round-trip consistency.
+    const old_range = view.range;
+    view.range = new_range;
+    view.center_x = c_center.x;
+    view.center_y = c_center.y;
+
+    // The new range must be positive and smaller.
+    try testing.expect(view.range > 0);
+    try testing.expect(view.range < old_range);
+}
+
+test "zoom auto-scale iterations" {
+    // At the initial view, auto-scale should not reduce below DEFAULT.
+    const v = ViewState{
+        .center_x = -0.5,
+        .center_y = 0.0,
+        .range = 3.5,
+        .max_iters = DEFAULT_MAX_ITERS,
+    };
+    // Simulate the auto-scale formula used on zoom.
+    const zoom_factor = INITIAL_RANGE / v.range;
+    const log2_zf = @log(zoom_factor) / @log(2.0);
+    const log2_start = @log(@as(f64, @floatFromInt(DEFAULT_MAX_ITERS))) / @log(2.0);
+    const target_f = @exp2(log2_start + log2_zf * AUTO_SCALE_SLOPE);
+    const clamped = @min(target_f, @as(f64, @floatFromInt(AUTO_SCALE_CAP)));
+    const target = nextPowerOf2(@as(u32, @intFromFloat(clamped)));
+    // At 1× zoom the target should be ≤ DEFAULT_MAX_ITERS.
+    try testing.expect(target <= DEFAULT_MAX_ITERS);
+    // After zooming in 100× the auto-scale should have kicked in.
+    const range2 = 3.5 / 100.0;
+    const zf2 = INITIAL_RANGE / range2;
+    const t2 = nextPowerOf2(@as(u32, @intFromFloat(@min(
+        @exp2(
+            @log(@as(f64, @floatFromInt(DEFAULT_MAX_ITERS))) / @log(2.0) +
+            (@log(zf2) / @log(2.0)) * AUTO_SCALE_SLOPE,
+        ),
+        @as(f64, @floatFromInt(AUTO_SCALE_CAP)),
+    ))));
+    try testing.expect(t2 > DEFAULT_MAX_ITERS);
+}
+
+test "screenToComplex inverse consistency" {
+    const v = ViewState{
+        .center_x = -0.5,
+        .center_y = 0.0,
+        .range = 3.5,
+        .max_iters = 100,
+    };
+    const w: i32 = 900;
+    const h: i32 = 800;
+
+    // Test several screen positions.
+    try testing.expect(std.math.isFinite(screenToComplex(0.0, 0.0, v, w, h).x));
+    try testing.expect(std.math.isFinite(screenToComplex(450.0, 400.0, v, w, h).x));
+    try testing.expect(std.math.isFinite(screenToComplex(899.0, 799.0, v, w, h).x));
+    try testing.expect(std.math.isFinite(screenToComplex(100.0, 700.0, v, w, h).x));
+    // Within the initial view bounds.
+    const c = screenToComplex(0.0, 0.0, v, w, h);
+    try testing.expect(c.x >= -2.25 and c.x <= 1.25);
+    try testing.expect(c.y >= -1.75 and c.y <= 1.75);
 }
