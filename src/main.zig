@@ -63,6 +63,9 @@ const RenderStrip = struct {
     range_x: f64,
     range_y: f64,
     max_iters: u32,
+    /// When true, skip the per-pixel cardioid/bulb interior tests because
+    /// the entire view is outside the bounding box of those shapes.
+    skip_periodicity: bool,
 };
 
 // ===========================================================================
@@ -159,9 +162,14 @@ fn renderStrip(ctx: *RenderStrip) void {
         while (px < w) : (px += 1) {
             const cx = ctx.left + @as(f64, @floatFromInt(px)) * ctx.range_x / @as(f64, @floatFromInt(w -| 1));
 
-            const q = (cx - 0.25) * (cx - 0.25) + cy2;
-            if (q * (q + (cx - 0.25)) <= 0.25 * cy2) continue;
-            if ((cx + 1.0) * (cx + 1.0) + cy2 <= 0.0625) continue;
+            // Periodicity check: skip iteration for points inside the main
+            // cardioid or period-2 bulb.  Skipped entirely when the view is
+            // far from these shapes (bounding box rejection).
+            if (!ctx.skip_periodicity) {
+                const q = (cx - 0.25) * (cx - 0.25) + cy2;
+                if (q * (q + (cx - 0.25)) <= 0.25 * cy2) continue;
+                if ((cx + 1.0) * (cx + 1.0) + cy2 <= 0.0625) continue;
+            }
 
             var zx: f64 = 0.0;
             var zy: f64 = 0.0;
@@ -210,6 +218,18 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
     // in areas that are now "inside set" (black → left unwritten).
     @memset(pixels, 0);
 
+    // Bounding-box test for cardioid/bulb periodicity checking.
+    // If the entire view lies outside [-1.25, 0.25] × [-0.6495, 0.6495]
+    // then no pixel can be inside the main cardioid or period-2 bulb,
+    // so we skip those per-pixel tests entirely.
+    const box_ymax = 3.0 * @sqrt(3.0) / 8.0;
+    const view_left = view.center_x - range_x / 2.0;
+    const view_right = view.center_x + range_x / 2.0;
+    const view_top = view.center_y - range_y / 2.0;
+    const view_bottom = view.center_y + range_y / 2.0;
+    const skip_periodicity = (view_right < -1.25 or view_left > 0.25 or
+        view_bottom < -box_ymax or view_top > box_ymax);
+
     // Determine thread count: at most MAX_RENDER_THREADS, and at least 32 rows each.
     var num_threads: usize = h / 32;
     if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
@@ -230,6 +250,7 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
             .range_x = range_x,
             .range_y = range_y,
             .max_iters = view.max_iters,
+            .skip_periodicity = skip_periodicity,
         };
         threads[i] = try std.Thread.spawn(.{}, renderStrip, .{&strips[i]});
     }
