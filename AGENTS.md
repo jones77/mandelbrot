@@ -7,19 +7,21 @@ v5.6-dev targeting raylib 6.0).  Multi-threaded rendering, undo/redo with
 cached pixel buffers, smooth coloring, cardioid/bulb periodicity checking, and
 derivative-based interior detection.
 
-## Primary reference document
+## Primary reference documents
 
 [Techniques for computer generated pictures in complex dynamics – Arnaud Chéritat](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set)
 
-This document is the canonical source for all rendering algorithms.  Sections 3.1–3.6
-describe escape-time coloring, potential-based coloring, interior detection,
-boundary distance estimators, normal maps, and image trapping.  Section 4 discusses
-mixing methods.
+[Cardioid and bulb checking – Claude Heiland-Allen (mathr.co.uk)](https://mathr.co.uk/blog/2022-11-19_cardioid_and_bulb_checking.html)
 
-**Note on usefulness:** Much of the math (especially Sections 3.5–3.6) is visual
-enhancement, not raw speed.  The biggest speed wins — derivative-based interior
-detection (Section 3.4) and cardioid/bulb checking — are already implemented.
-Future agents should focus on the visualization modes.
+The Chéritat document is the main reference for visualisation modes and rendering
+algorithms (Sections 3.1–3.6).  The mathr.co.uk article was used for cardioid/bulb
+bounding‑box optimisation.  Perturbation theory (not yet implemented) is described
+in K. I. Martin's "Perturbation theory for the Mandelbrot set" (2013).
+
+**Note on usefulness:** Much of the math (especially Sections 3.5–3.6 of Chéritat)
+is visual enhancement, not raw speed.  The biggest speed wins — derivative-based
+interior detection (Section 3.4) and cardioid/bulb checking — are already
+implemented.  Future agents should focus on the visualisation modes.
 
 ## What is already implemented
 
