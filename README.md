@@ -76,6 +76,7 @@ The **Mandelbrot set** is the set of complex numbers *c* where the iteration
 - [Mandelbrot set – Wikipedia](https://en.wikipedia.org/wiki/Mandelbrot_set)
 - [The Mandelbrot Set – Numberphile](https://www.youtube.com/watch?v=NGMRB4O922I)
 - [Plotting algorithms – smooth coloring](https://en.wikipedia.org/wiki/Plotting_algorithms_for_the_Mandelbrot_set#Continuous_(smooth)_coloring)
+- [Cardioid and bulb checking – Claude Heiland-Allen (mathr.co.uk)](https://mathr.co.uk/blog/2022-11-19_cardioid_and_bulb_checking.html)
 
 ---
 
