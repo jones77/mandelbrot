@@ -362,7 +362,7 @@ pub fn main() anyerror!void {
                     rl.updateTexture(texture, image.data);
                 }
                 if (mx >= screen_w - 36 and mx < screen_w - 8) {
-                    view.max_iters = @min(8192, view.max_iters * 2);
+                    view.max_iters = @min(32768, view.max_iters * 2);
                     try renderMandelbrot(&image, view);
                     rl.updateTexture(texture, image.data);
                 }
@@ -417,7 +417,7 @@ pub fn main() anyerror!void {
             // to resolve fine detail at the Mandelbrot boundary.
             const zoom_factor = INITIAL_RANGE / view.range;
             const target_iters = zoom_factor * 80.0;
-            if (target_iters > 0 and target_iters <= 8192) {
+            if (target_iters > 0 and target_iters <= 32768) {
                 view.max_iters = @max(view.max_iters, @as(u32, @intFromFloat(target_iters)));
             }
 
@@ -443,7 +443,7 @@ pub fn main() anyerror!void {
 
             var changed = false;
             if (wheel > 0 or key_inc) {
-                view.max_iters = @min(8192, view.max_iters * 2);
+                view.max_iters = @min(32768, view.max_iters * 2);
                 changed = true;
             } else if (wheel < 0 or key_dec) {
                 view.max_iters = @max(32, view.max_iters / 2);
