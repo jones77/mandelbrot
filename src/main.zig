@@ -35,7 +35,7 @@ const MAX_RENDER_THREADS: usize = 8;
 const MIN_ROWS_PER_THREAD: usize = 32;
 const RENDER_TIMEOUT_S: f64 = 30.0;
 const CARDIOID_Y_MAX: f64 = 3.0 * @sqrt(3.0) / 8.0;
-const INTERIOR_EPSILON_SQ: f32 = 1e-6;   // |(P^n)'(c)|² < ε → inside M
+const INTERIOR_BASE_EPSILON_SQ: f32 = 1e-6;
 const PERIODICITY_EPSILON_SQ: f32 = 1e-8; // |z_{n+k} - z_n|² < ε → periodic
 
 // ---- UI layout constants ----
@@ -114,6 +114,8 @@ const RenderStrip = struct {
     deadline_s: f64,
     /// Set to true by the worker when it stops due to timeout.
     timed_out: bool,
+    /// |der|² threshold for interior detection, scaled with iteration depth.
+    interior_eps_sq: f32,
 };
 
 // ===========================================================================
@@ -243,7 +245,7 @@ fn renderStrip(ctx: *RenderStrip) void {
             // point never escapes (inside the set → leave black).
             const mu: f32 = while (iter < max_iters) : (iter += 1) {
                 // Derivative-based interior detection: (P^n)'(c) → 0.
-                if (der.normSq() < INTERIOR_EPSILON_SQ) {
+                if (der.normSq() < ctx.interior_eps_sq) {
                     break @as(f32, @floatFromInt(max_iters));
                 }
                 if (z.normSq() > 4.0) {
@@ -352,6 +354,13 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState, clear: bool) !bool {
 
     const deadline_s = rl.getTime() + RENDER_TIMEOUT_S;
 
+    // Interior detection epsilon scales with iteration depth: at higher
+    // iteration counts the derivative shrinks more slowly, so we relax
+    // the threshold proportionally (the document notes that even
+    // |der| < 0.1 works to identify most interior points).
+    const interior_eps_sq = INTERIOR_BASE_EPSILON_SQ *
+        (@as(f32, @floatFromInt(view.max_iters)) / @as(f32, @floatFromInt(DEFAULT_MAX_ITERS)));
+
     // Determine thread count: at most MAX_RENDER_THREADS, and at least MIN_ROWS_PER_THREAD each.
     var num_threads: usize = h / MIN_ROWS_PER_THREAD;
     if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
@@ -375,6 +384,7 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState, clear: bool) !bool {
             .skip_periodicity = skip_periodicity,
             .deadline_s = deadline_s,
             .timed_out = false,
+            .interior_eps_sq = interior_eps_sq,
         };
         threads[i] = try std.Thread.spawn(.{}, renderStrip, .{&strips[i]});
     }

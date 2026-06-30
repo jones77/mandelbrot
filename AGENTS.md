@@ -169,10 +169,7 @@ Implementation approach:
 
 ## Code review TODO items
 
-- [ ] `INTERIOR_EPSILON_SQ` may need tuning at very deep zooms (the document notes
-      that epsilon=0.1 sometimes gives false positives near parabolic parameters)
-- [ ] Window resize invalidates pixel cache silently — a small "Resize clears history"
-      hint in the HUD would help (low priority)
+*(All items resolved — no open tasks.)*
 
 **Already fixed in earlier sessions:**
 - [x] `zx`/`zy`/`dx`/`dy` in `renderStrip` → refactored into `Coord` struct with `normSq()` and `sq()`
@@ -183,6 +180,9 @@ Implementation approach:
 - [x] "Resize clears history" hint → now displayed in bottom-right corner of HUD
 - [x] The `hslToRgb` function uses `f32` but the Mandelbrot math uses `f64` — this
       is fine for the palette (computed once) but could be noted
+- [x] `INTERIOR_BASE_EPSILON_SQ` scaled linearly with `max_iters` so deeper zooms
+      relax the derivative threshold (false positives near parabolic params are
+      less likely at higher iteration counts)
 
 ## Build & test
 
