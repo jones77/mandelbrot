@@ -80,20 +80,6 @@ The **Mandelbrot set** is the set of complex numbers *c* where the iteration
 
 ---
 
-## Zig 0.16 vs 0.17 differences relevant to this project
-
-Zig 0.17 is a development branch not yet released.  **raylib-zig targets
-Zig 0.16.x** (its `build.zig.zon` declares `minimum_zig_version = "0.16.0"`).
-If you use Zig 0.17 you may encounter build-system API changes:
-
-- The `b.dependency()` / `root_module.addImport()` / `linkLibrary()` API
-  used in this project is stable across both versions.
-- If a deprecation or missing function arises, consult `zig build --help`
-  and the [Zig 0.17 release notes](https://ziglang.org/download/0.17.0/release-notes.html)
-  (once published).
-
----
-
 ## Alternative: using a system-installed raylib
 
 If you have raylib installed system-wide:
@@ -112,9 +98,14 @@ sudo dnf install raylib-devel
 vcpkg install raylib
 ```
 
-Then edit `build.zig` to replace the `raylib_zig` dependency block with:
+Then replace the `raylib_zig` dependency block in `build.zig` with:
 
 ```zig
+const raylib = b.dependency("raylib", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("raylib", raylib);
 exe.linkSystemLibrary("raylib");
 exe.linkLibC();
 ```

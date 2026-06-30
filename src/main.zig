@@ -32,6 +32,7 @@ const TARGET_FPS: i32 = 60;
 const PALETTE_SIZE: usize = 1024;
 const MAX_RENDER_THREADS: usize = 8;
 const RENDER_TIMEOUT_S: f64 = 30.0;
+const CARDIOID_Y_MAX: f64 = 3.0 * @sqrt(3.0) / 8.0;
 
 // ===========================================================================
 // Types
@@ -237,22 +238,26 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState, clear: bool) !bool {
     const pixels = @as([*]u8, @ptrCast(image.data))[0 .. w * h * 4];
 
     if (clear) {
-        // Clear to black so old pixels from a previous zoom don't persist
-        // in areas that are now "inside set" (black → left unwritten).
+        // Clear to opaque black — old coloured pixels from a previous zoom
+        // must not bleed into "inside set" areas of the new view.
+        // @memset alone would set alpha=0 (transparent), so fix it after.
         @memset(pixels, 0);
+        var a: usize = 3;
+        while (a < pixels.len) : (a += 4) {
+            pixels[a] = 255;
+        }
     }
 
     // Bounding-box test for cardioid/bulb periodicity checking.
     // If the entire view lies outside [-1.25, 0.25] × [-0.6495, 0.6495]
     // then no pixel can be inside the main cardioid or period-2 bulb,
     // so we skip those per-pixel tests entirely.
-    const box_ymax = 3.0 * @sqrt(3.0) / 8.0;
     const view_left = view.center_x - range_x / 2.0;
     const view_right = view.center_x + range_x / 2.0;
     const view_top = view.center_y - range_y / 2.0;
     const view_bottom = view.center_y + range_y / 2.0;
     const skip_periodicity = (view_right < -1.25 or view_left > 0.25 or
-        view_bottom < -box_ymax or view_top > box_ymax);
+        view_bottom < -CARDIOID_Y_MAX or view_top > CARDIOID_Y_MAX);
 
     const deadline_s = rl.getTime() + RENDER_TIMEOUT_S;
 
@@ -521,7 +526,7 @@ pub fn main() anyerror!void {
 
             // Auto-scale iterations: deeper zooms need more iterations
             // to resolve fine detail at the Mandelbrot boundary.
-            // Snaps to the next power of two (2^4 … 2^31).
+            // Snaps to the next power of two (2^4 … 2^16).
             const zoom_factor = INITIAL_RANGE / view.range;
             const raw_iters = zoom_factor * AUTO_SCALE_BASE;
             const clamped = @min(raw_iters, @as(f64, @floatFromInt(MAX_ITERS_CAP)));
