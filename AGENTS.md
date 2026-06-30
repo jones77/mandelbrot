@@ -18,6 +18,10 @@ algorithms (Sections 3.1–3.6).  A condensed summary for implementing the vario
 colouring modes is at `cheritat-algorithms.md`.  The mathr.co.uk article was
 used for cardioid/bulb bounding‑box optimisation.
 
+**Do not fetch the original Chéritat wiki page without asking the user.**
+It is ~135k tokens and most of the useful content is already extracted into
+`cheritat-algorithms.md`.  Ask first if the full page is needed.
+
 **Note on usefulness:** Much of the math (especially Sections 3.5–3.6 of Chéritat)
 is visual enhancement, not raw speed.  The biggest speed wins — derivative-based
 interior detection (Section 3.4) and cardioid/bulb checking — are already
