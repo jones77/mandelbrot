@@ -120,8 +120,11 @@ fn hslToRgb(h: f32, s: f32, l: f32) rl.Color {
 /// iteration limit adds detail without shifting existing colours.
 fn smoothColor(mu: f64, max_iters: u32) rl.Color {
     if (mu >= @as(f64, @floatFromInt(max_iters))) return .black;
-    const scale: f64 = 200.0;
-    const raw = mu / scale;
+    // Density 4 spreads the full 1024-entry palette across ~256 iterations,
+    // so a rainbow cycle fits within the default detail.  The palette wraps
+    // seamlessly at higher iteration counts.
+    const density: f64 = 4.0;
+    const raw = mu * density;
     const idx = @as(usize, @intFromFloat(@mod(raw, @as(f64, @floatFromInt(PALETTE_SIZE)))));
     const frac = raw - @floor(raw);
     const next = (idx + 1) % PALETTE_SIZE;
