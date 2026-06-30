@@ -22,6 +22,10 @@ const INITIAL_CENTER_Y: f64 = 0.0;
 const INITIAL_RANGE: f64 = 3.5;
 
 const DEFAULT_MAX_ITERS: u32 = 256;
+const MIN_ITERS: u32 = 32;
+const MAX_ITERS_CAP: u32 = 32768;
+const AUTO_SCALE_BASE: f64 = 80.0;
+const PALETTE_DENSITY: f64 = 4.0;
 const MAX_HISTORY: usize = 64;
 const MIN_SELECTION_PX: f64 = 8.0;
 const TARGET_FPS: i32 = 60;
@@ -115,16 +119,12 @@ fn hslToRgb(h: f32, s: f32, l: f32) rl.Color {
 }
 
 /// Smooth (continuous) iteration colour.  `mu` is the fractional
-/// iteration count from the escape-time formula.  The palette cycles
-/// on a fixed scale (every ~200 iterations) so that increasing the
-/// iteration limit adds detail without shifting existing colours.
+/// iteration count from the escape-time formula.  PALETTE_DENSITY spreads
+/// the full palette across ~256 iterations (default range) so the initial
+/// view shows a full rainbow cycle.
 fn smoothColor(mu: f64, max_iters: u32) rl.Color {
     if (mu >= @as(f64, @floatFromInt(max_iters))) return .black;
-    // Density 4 spreads the full 1024-entry palette across ~256 iterations,
-    // so a rainbow cycle fits within the default detail.  The palette wraps
-    // seamlessly at higher iteration counts.
-    const density: f64 = 4.0;
-    const raw = mu * density;
+    const raw = mu * PALETTE_DENSITY;
     const idx = @as(usize, @intFromFloat(@mod(raw, @as(f64, @floatFromInt(PALETTE_SIZE)))));
     const frac = raw - @floor(raw);
     const next = (idx + 1) % PALETTE_SIZE;
@@ -357,12 +357,12 @@ pub fn main() anyerror!void {
             const by = screen_h - 46;
             if (my >= by and my < by + 28) {
                 if (mx >= screen_w - 68 and mx < screen_w - 40) {
-                    view.max_iters = @max(32, view.max_iters / 2);
+                    view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
                     try renderMandelbrot(&image, view);
                     rl.updateTexture(texture, image.data);
                 }
                 if (mx >= screen_w - 36 and mx < screen_w - 8) {
-                    view.max_iters = @min(32768, view.max_iters * 2);
+                    view.max_iters = @min(MAX_ITERS_CAP, view.max_iters * 2);
                     try renderMandelbrot(&image, view);
                     rl.updateTexture(texture, image.data);
                 }
@@ -416,8 +416,8 @@ pub fn main() anyerror!void {
             // Auto-scale iterations: deeper zooms need more iterations
             // to resolve fine detail at the Mandelbrot boundary.
             const zoom_factor = INITIAL_RANGE / view.range;
-            const target_iters = zoom_factor * 80.0;
-            if (target_iters > 0 and target_iters <= 32768) {
+            const target_iters = zoom_factor * AUTO_SCALE_BASE;
+            if (target_iters > 0 and target_iters <= MAX_ITERS_CAP) {
                 view.max_iters = @max(view.max_iters, @as(u32, @intFromFloat(target_iters)));
             }
 
@@ -443,10 +443,10 @@ pub fn main() anyerror!void {
 
             var changed = false;
             if (wheel > 0 or key_inc) {
-                view.max_iters = @min(32768, view.max_iters * 2);
+                view.max_iters = @min(MAX_ITERS_CAP, view.max_iters * 2);
                 changed = true;
             } else if (wheel < 0 or key_dec) {
-                view.max_iters = @max(32, view.max_iters / 2);
+                view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
                 changed = true;
             }
             if (changed) {
