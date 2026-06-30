@@ -222,7 +222,9 @@ fn renderStrip(ctx: *RenderStrip) void {
 }
 
 /// Render the Mandelbrot set across multiple CPU cores.
-fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
+/// `clear` — zero the pixel buffer first (needed for a new view).
+/// Returns `true` if the render timed out (partial image, press Space to continue).
+fn renderMandelbrot(image: *rl.Image, view: ViewState, clear: bool) !bool {
     const w: usize = @intCast(image.width);
     const h: usize = @intCast(image.height);
 
@@ -234,9 +236,11 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
 
     const pixels = @as([*]u8, @ptrCast(image.data))[0 .. w * h * 4];
 
-    // Clear to black so old pixels from a previous zoom don't persist
-    // in areas that are now "inside set" (black → left unwritten).
-    @memset(pixels, 0);
+    if (clear) {
+        // Clear to black so old pixels from a previous zoom don't persist
+        // in areas that are now "inside set" (black → left unwritten).
+        @memset(pixels, 0);
+    }
 
     // Bounding-box test for cardioid/bulb periodicity checking.
     // If the entire view lies outside [-1.25, 0.25] × [-0.6495, 0.6495]
@@ -282,7 +286,7 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
         threads[i].join();
     }
 
-    // Log if any thread timed out.
+    // Log if any thread timed out, and tell the caller.
     for (0..num_threads) |i| {
         if (strips[i].timed_out) {
             std.debug.print(
@@ -297,9 +301,10 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
                 view.range,
                 view.max_iters,
             });
-            break;
+            return true;
         }
     }
+    return false;
 }
 
 // ===========================================================================
@@ -377,6 +382,7 @@ pub fn main() anyerror!void {
     var history: [MAX_HISTORY]HistoryEntry = undefined;
     var history_len: usize = 0;
     var history_ptr: usize = 0;
+    var render_timed_out = false;
 
     // ---- Window ----
     rl.initWindow(DEFAULT_WIDTH, DEFAULT_HEIGHT, "Mandelbrot Set");
@@ -402,7 +408,7 @@ pub fn main() anyerror!void {
     };
 
     // ---- Initial render ----
-    try renderMandelbrot(&image, view);
+    render_timed_out = try renderMandelbrot(&image, view, true);
     rl.updateTexture(texture, image.data);
 
     // Seed history with the initial view.
@@ -436,7 +442,7 @@ pub fn main() anyerror!void {
             image = rl.genImageColor(screen_w, screen_h, .black);
             texture = try rl.loadTextureFromImage(image);
 
-            try renderMandelbrot(&image, view);
+            render_timed_out = try renderMandelbrot(&image, view, true);
             rl.updateTexture(texture, image.data);
         }
 
@@ -453,12 +459,12 @@ pub fn main() anyerror!void {
             if (my >= by and my < by + 28) {
                 if (mx >= screen_w - 68 and mx < screen_w - 40) {
                     view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
-                    try renderMandelbrot(&image, view);
+                    render_timed_out = try renderMandelbrot(&image, view, true);
                     rl.updateTexture(texture, image.data);
                 }
                 if (mx >= screen_w - 36 and mx < screen_w - 8) {
                     view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
-                    try renderMandelbrot(&image, view);
+                    render_timed_out = try renderMandelbrot(&image, view, true);
                     rl.updateTexture(texture, image.data);
                 }
             }
@@ -522,7 +528,7 @@ pub fn main() anyerror!void {
                 view.max_iters = target_iters;
             }
 
-            try renderMandelbrot(&image, view);
+            render_timed_out = try renderMandelbrot(&image, view, true);
             rl.updateTexture(texture, image.data);
 
             // Save the new view + its pixels into history (undo target).
@@ -559,7 +565,7 @@ pub fn main() anyerror!void {
                     );
                     rl.updateTexture(texture, image.data);
                 } else {
-                    try renderMandelbrot(&image, view);
+                    render_timed_out = try renderMandelbrot(&image, view, true);
                     rl.updateTexture(texture, image.data);
                 }
             }
@@ -581,7 +587,7 @@ pub fn main() anyerror!void {
                     );
                     rl.updateTexture(texture, image.data);
                 } else {
-                    try renderMandelbrot(&image, view);
+                    render_timed_out = try renderMandelbrot(&image, view, true);
                     rl.updateTexture(texture, image.data);
                 }
             }
@@ -602,7 +608,7 @@ pub fn main() anyerror!void {
                 changed = true;
             }
             if (changed) {
-                try renderMandelbrot(&image, view);
+                render_timed_out = try renderMandelbrot(&image, view, true);
                 rl.updateTexture(texture, image.data);
             }
         }
@@ -618,8 +624,13 @@ pub fn main() anyerror!void {
             view.center_x = INITIAL_CENTER_X;
             view.center_y = INITIAL_CENTER_Y;
             view.range = INITIAL_RANGE;
-            history_len = 0;
-            try renderMandelbrot(&image, view);
+            render_timed_out = try renderMandelbrot(&image, view, true);
+            rl.updateTexture(texture, image.data);
+        }
+
+        // -- Space -> continue a timed-out render (add another 30s, preserve pixels) --
+        if (render_timed_out and rl.isKeyPressed(.space)) {
+            render_timed_out = try renderMandelbrot(&image, view, false);
             rl.updateTexture(texture, image.data);
         }
 
@@ -674,6 +685,16 @@ pub fn main() anyerror!void {
             14,
             rl.Color.init(150, 150, 150, 255),
         );
+
+        if (render_timed_out) {
+            rl.drawText(
+                "[Space]: continue rendering (30s more)",
+                10,
+                screen_h - 46,
+                12,
+                rl.Color.init(255, 200, 100, 255),
+            );
+        }
 
         // On-screen iteration buttons.
         const btn_y = screen_h - 46;
