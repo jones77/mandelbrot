@@ -481,288 +481,263 @@ fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64) Com
 // Main
 // ===========================================================================
 
-pub fn main() anyerror!void {
-    buildPalette();
+/// Application state, grouped so the main loop stays short.
+const App = struct {
+    view: ViewState,
+    history: [MAX_HISTORY]HistoryEntry,
+    history_len: usize,
+    history_ptr: usize,
+    render_timed_out: bool,
+    screen_w: i32,
+    screen_h: i32,
+    image: rl.Image,
+    texture: rl.Texture2D,
+    drag: DragState,
 
-    var view = ViewState{
-        .center_x = INITIAL_CENTER_X,
-        .center_y = INITIAL_CENTER_Y,
-        .range = INITIAL_RANGE,
-        .max_iters = DEFAULT_MAX_ITERS,
-    };
+    fn init() !App {
+        buildPalette();
+        const sw = rl.getScreenWidth();
+        const sh = rl.getScreenHeight();
+        const img = rl.genImageColor(sw, sh, .black);
+        const tex = try rl.loadTextureFromImage(img);
 
-    var history: [MAX_HISTORY]HistoryEntry = undefined;
-    var history_len: usize = 0;
-    var history_ptr: usize = 0;
-    var render_timed_out = false;
+        return App{
+            .view = ViewState{
+                .center_x = INITIAL_CENTER_X,
+                .center_y = INITIAL_CENTER_Y,
+                .range = INITIAL_RANGE,
+                .max_iters = DEFAULT_MAX_ITERS,
+            },
+            .history = undefined,
+            .history_len = 0,
+            .history_ptr = 0,
+            .render_timed_out = false,
+            .screen_w = sw,
+            .screen_h = sh,
+            .image = img,
+            .texture = tex,
+            .drag = DragState{ .start_x = 0, .start_y = 0, .current_x = 0, .current_y = 0, .active = false },
+        };
+    }
 
-    // ---- Window ----
-    rl.initWindow(DEFAULT_WIDTH, DEFAULT_HEIGHT, "Mandelbrot Set");
-    defer rl.closeWindow();
-    rl.setTargetFPS(TARGET_FPS);
+    fn deinit(self: *App) void {
+        for (0..self.history_len) |i| {
+            if (self.history[i].pixels.len > 0)
+                std.heap.page_allocator.free(self.history[i].pixels);
+        }
+        rl.unloadTexture(self.texture);
+        rl.unloadImage(self.image);
+    }
 
-    // ---- Image & texture ----
-    var screen_w: i32 = rl.getScreenWidth();
-    var screen_h: i32 = rl.getScreenHeight();
+    // ---------------------------------------------------------------
+    // Rendering helpers
+    // ---------------------------------------------------------------
 
-    var image = rl.genImageColor(screen_w, screen_h, .black);
-    defer rl.unloadImage(image);
+    fn renderFresh(self: *App, clear: bool) !bool {
+        self.render_timed_out = try renderMandelbrot(&self.image, self.view, clear);
+        rl.updateTexture(self.texture, self.image.data);
+        return self.render_timed_out;
+    }
 
-    var texture = try rl.loadTextureFromImage(image);
-    defer rl.unloadTexture(texture);
+    fn saveSnapshot(self: *App) !void {
+        try pushHistory(&self.history, &self.history_len, &self.history_ptr, self.view, &self.image, self.screen_w, self.screen_h);
+    }
 
-    var drag = DragState{
-        .start_x = 0,
-        .start_y = 0,
-        .current_x = 0,
-        .current_y = 0,
-        .active = false,
-    };
+    fn restoreCached(self: *App, entry: *const HistoryEntry) !void {
+        if (entry.w == @as(usize, @intCast(self.screen_w)) and
+            entry.h == @as(usize, @intCast(self.screen_h)))
+        {
+            @memcpy(
+                @as([*]u8, @ptrCast(self.image.data))[0 .. entry.w * entry.h * 4],
+                entry.pixels,
+            );
+            rl.updateTexture(self.texture, self.image.data);
+        } else {
+            _ = try self.renderFresh(true);
+        }
+    }
 
-    // ---- Initial render ----
-    render_timed_out = try renderMandelbrot(&image, view, true);
-    rl.updateTexture(texture, image.data);
+    // ---------------------------------------------------------------
+    // Frame logic
+    // ---------------------------------------------------------------
 
-    // Seed history with the initial view.
-    try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
-
-    // ---- Main loop ----
-    while (!rl.windowShouldClose()) {
-        // ---- Handle window resize ----
+    fn handleResize(self: *App) !void {
         const new_w = rl.getScreenWidth();
         const new_h = rl.getScreenHeight();
-        if (new_w != screen_w or new_h != screen_h) {
-            screen_w = new_w;
-            screen_h = new_h;
+        if (new_w == self.screen_w and new_h == self.screen_h) return;
 
-            rl.unloadTexture(texture);
-            rl.unloadImage(image);
+        self.screen_w = new_w;
+        self.screen_h = new_h;
+        rl.unloadTexture(self.texture);
+        rl.unloadImage(self.image);
+        self.image = rl.genImageColor(self.screen_w, self.screen_h, .black);
+        self.texture = try rl.loadTextureFromImage(self.image);
+        _ = try self.renderFresh(true);
+    }
 
-            image = rl.genImageColor(screen_w, screen_h, .black);
-            texture = try rl.loadTextureFromImage(image);
-
-            render_timed_out = try renderMandelbrot(&image, view, true);
-            rl.updateTexture(texture, image.data);
-        }
-
-        // ============================================================
-        // Input
-        // ============================================================
-
-        // -- On-screen [+] / [−] button clicks (checked before drag so
-        //    a zoom-release doesn't accidentally trigger a button) --
-        if (!drag.active and rl.isMouseButtonReleased(.left)) {
+    fn handleInput(self: *App) !void {
+        // -- On-screen [+] / [−] button clicks --
+        if (!self.drag.active and rl.isMouseButtonReleased(.left)) {
             const mx = rl.getMouseX();
             const my = rl.getMouseY();
-            const by = screen_h - BTN_Y_OFFSET;
+            const by = self.screen_h - BTN_Y_OFFSET;
             if (my >= by and my < by + BTN_SIZE) {
-                // Minus button (rightmost)
-                if (mx >= screen_w - BTN_GAP - BTN_SIZE and mx < screen_w - BTN_GAP) {
-                    truncateFuture(&history, &history_len, history_ptr + 1);
-                    view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
-                    render_timed_out = try renderMandelbrot(&image, view, true);
-                    rl.updateTexture(texture, image.data);
-                    try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
+                if (mx >= self.screen_w - BTN_GAP - BTN_SIZE and mx < self.screen_w - BTN_GAP) {
+                    truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
+                    self.view.max_iters = @max(MIN_ITERS, self.view.max_iters / 2);
+                    _ = try self.renderFresh(true);
+                    try self.saveSnapshot();
                 }
-                // Plus button
-                if (mx >= screen_w - BTN_SIZE and mx < screen_w) {
-                    truncateFuture(&history, &history_len, history_ptr + 1);
-                    view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
-                    render_timed_out = try renderMandelbrot(&image, view, true);
-                    rl.updateTexture(texture, image.data);
-                    try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
+                if (mx >= self.screen_w - BTN_SIZE and mx < self.screen_w) {
+                    truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
+                    self.view.max_iters = @min(MAX_ITERS_CAP, self.view.max_iters +| self.view.max_iters);
+                    _ = try self.renderFresh(true);
+                    try self.saveSnapshot();
                 }
             }
         }
 
         // -- Start drag --
         if (rl.isMouseButtonPressed(.left)) {
-            drag.start_x = @floatFromInt(rl.getMouseX());
-            drag.start_y = @floatFromInt(rl.getMouseY());
-            drag.current_x = drag.start_x;
-            drag.current_y = drag.start_y;
-            drag.active = true;
+            self.drag.start_x = @floatFromInt(rl.getMouseX());
+            self.drag.start_y = @floatFromInt(rl.getMouseY());
+            self.drag.current_x = self.drag.start_x;
+            self.drag.current_y = self.drag.start_y;
+            self.drag.active = true;
         }
 
-        // -- Update drag (constrain to square in real time) --
-        if (drag.active and rl.isMouseButtonDown(.left)) {
+        // -- Update drag --
+        if (self.drag.active and rl.isMouseButtonDown(.left)) {
             const raw_mx: f64 = @floatFromInt(rl.getMouseX());
             const raw_my: f64 = @floatFromInt(rl.getMouseY());
-            const sq = constrainDragSquare(drag.start_x, drag.start_y, raw_mx, raw_my);
-            drag.current_x = sq.x;
-            drag.current_y = sq.y;
+            const sq = constrainDragSquare(self.drag.start_x, self.drag.start_y, raw_mx, raw_my);
+            self.drag.current_x = sq.x;
+            self.drag.current_y = sq.y;
         }
 
         // -- End drag -> zoom in --
-        if (drag.active and rl.isMouseButtonReleased(.left)) {
-            defer drag.active = false;
+        if (self.drag.active and rl.isMouseButtonReleased(.left)) {
+            defer self.drag.active = false;
 
-            const size = @abs(drag.current_x - drag.start_x);
-            if (size < MIN_SELECTION_PX) continue;
+            const size = @abs(self.drag.current_x - self.drag.start_x);
+            if (size < MIN_SELECTION_PX) return;
 
-            const sel_cx = (drag.start_x + drag.current_x) / 2.0;
-            const sel_cy = (drag.start_y + drag.current_y) / 2.0;
+            const sel_cx = (self.drag.start_x + self.drag.current_x) / 2.0;
+            const sel_cy = (self.drag.start_y + self.drag.current_y) / 2.0;
 
-            const c_center = screenToComplex(sel_cx, sel_cy, view, screen_w, screen_h);
+            const c_center = screenToComplex(sel_cx, sel_cy, self.view, self.screen_w, self.screen_h);
+            const smaller = @min(self.screen_w, self.screen_h);
+            const new_range = self.view.range * (size / @as(f64, @floatFromInt(smaller)));
 
-            // Use the smaller image dimension so a square selection fills
-            // the full height of the zoomed view (no clipping).
-            const smaller = @min(screen_w, screen_h);
-            const new_range = view.range * (size / @as(f64, @floatFromInt(smaller)));
+            truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
 
-            // Truncate any "future" entries (left over after an undo)
-            // before updating view.
-            truncateFuture(&history, &history_len, history_ptr + 1);
+            self.view.center_x = c_center.x;
+            self.view.center_y = c_center.y;
+            self.view.range = new_range;
 
-            view.center_x = c_center.x;
-            view.center_y = c_center.y;
-            view.range = new_range;
-
-            // Auto-scale iterations: deeper zooms need more iterations
-            // to resolve fine detail at the Mandelbrot boundary.
-            // Uses a logarithmic scale: each ~4 zoom doublings (16x zoom)
-            // doubles the iteration count, starting from DEFAULT_MAX_ITERS.
-            const zoom_factor = INITIAL_RANGE / view.range;
+            // Auto-scale iterations.
+            const zoom_factor = INITIAL_RANGE / self.view.range;
             const log2_zf = @log(zoom_factor) / @log(2.0);
             const log2_start = @log(@as(f64, @floatFromInt(DEFAULT_MAX_ITERS))) / @log(2.0);
             const target_f = @exp2(log2_start + log2_zf * AUTO_SCALE_SLOPE);
             const clamped = @min(target_f, @as(f64, @floatFromInt(AUTO_SCALE_CAP)));
             const target_iters = nextPowerOf2(@as(u32, @intFromFloat(clamped)));
-            if (target_iters > view.max_iters and target_iters <= AUTO_SCALE_CAP) {
-                view.max_iters = target_iters;
+            if (target_iters > self.view.max_iters and target_iters <= AUTO_SCALE_CAP) {
+                self.view.max_iters = target_iters;
             }
 
-            render_timed_out = try renderMandelbrot(&image, view, true);
-            rl.updateTexture(texture, image.data);
+            _ = try self.renderFresh(true);
 
-            // Save the new view + its pixels into history (undo target).
-            try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
+            // Save new view for undo.
+            if (self.history_len < MAX_HISTORY) {
+                const px_w: usize = @intCast(self.screen_w);
+                const px_h: usize = @intCast(self.screen_h);
+                const px_size = px_w * px_h * 4;
+                const pixels = try std.heap.page_allocator.alloc(u8, px_size);
+                @memcpy(pixels, @as([*]u8, @ptrCast(self.image.data))[0..px_size]);
+                self.history[self.history_len] = HistoryEntry{ .view = self.view, .pixels = pixels, .w = px_w, .h = px_h };
+                self.history_len += 1;
+                self.history_ptr = self.history_len - 1;
+            }
         }
 
-        // -- Left / Delete / Backspace -> undo zoom (instantly from cache) --
+        // -- Undo / redo --
         if (rl.isKeyPressed(.delete) or rl.isKeyPressed(.backspace) or rl.isKeyPressed(.left)) {
-            if (history_ptr > 0) {
-                history_ptr -= 1;
-                const entry = &history[history_ptr];
-                view = entry.view;
-
-                if (entry.w == @as(usize, @intCast(screen_w)) and
-                    entry.h == @as(usize, @intCast(screen_h)))
-                {
-                    @memcpy(
-                        @as([*]u8, @ptrCast(image.data))[0 .. entry.w * entry.h * 4],
-                        entry.pixels,
-                    );
-                    rl.updateTexture(texture, image.data);
-                } else {
-                    render_timed_out = try renderMandelbrot(&image, view, true);
-                    rl.updateTexture(texture, image.data);
-                }
+            if (self.history_ptr > 0) {
+                self.history_ptr -= 1;
+                self.view = self.history[self.history_ptr].view;
+                try self.restoreCached(&self.history[self.history_ptr]);
             }
         }
-
-        // -- Right -> redo zoom (instantly from cache) --
         if (rl.isKeyPressed(.right)) {
-            if (history_ptr + 1 < history_len) {
-                history_ptr += 1;
-                const entry = &history[history_ptr];
-                view = entry.view;
-
-                if (entry.w == @as(usize, @intCast(screen_w)) and
-                    entry.h == @as(usize, @intCast(screen_h)))
-                {
-                    @memcpy(
-                        @as([*]u8, @ptrCast(image.data))[0 .. entry.w * entry.h * 4],
-                        entry.pixels,
-                    );
-                    rl.updateTexture(texture, image.data);
-                } else {
-                    render_timed_out = try renderMandelbrot(&image, view, true);
-                    rl.updateTexture(texture, image.data);
-                }
+            if (self.history_ptr + 1 < self.history_len) {
+                self.history_ptr += 1;
+                self.view = self.history[self.history_ptr].view;
+                try self.restoreCached(&self.history[self.history_ptr]);
             }
         }
 
-        // -- +/- keys -> double/halve iterations (saved in history so undoable) --
+        // -- +/- keys -> double/halve iterations --
         {
             const key_inc = rl.isKeyPressed(.equal) or rl.isKeyPressed(.kp_add);
             const key_dec = rl.isKeyPressed(.minus) or rl.isKeyPressed(.kp_subtract);
-
             if (key_inc or key_dec) {
-                truncateFuture(&history, &history_len, history_ptr + 1);
+                truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
                 if (key_inc) {
-                    view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
+                    self.view.max_iters = @min(MAX_ITERS_CAP, self.view.max_iters +| self.view.max_iters);
                 } else {
-                    view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
+                    self.view.max_iters = @max(MIN_ITERS, self.view.max_iters / 2);
                 }
-                render_timed_out = try renderMandelbrot(&image, view, true);
-                rl.updateTexture(texture, image.data);
-                try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
+                _ = try self.renderFresh(true);
+                try self.saveSnapshot();
             }
         }
 
-        // -- R -> reset (clean up all cached entries) --
+        // -- R -> reset --
         if (rl.isKeyPressed(.r)) {
-            truncateFuture(&history, &history_len, 0);
-            history_len = 0;
-            history_ptr = 0;
-            view.center_x = INITIAL_CENTER_X;
-            view.center_y = INITIAL_CENTER_Y;
-            view.range = INITIAL_RANGE;
-            render_timed_out = try renderMandelbrot(&image, view, true);
-            rl.updateTexture(texture, image.data);
+            truncateFuture(&self.history, &self.history_len, 0);
+            self.history_len = 0;
+            self.history_ptr = 0;
+            self.view.center_x = INITIAL_CENTER_X;
+            self.view.center_y = INITIAL_CENTER_Y;
+            self.view.range = INITIAL_RANGE;
+            _ = try self.renderFresh(true);
         }
 
-        // -- Space -> continue a timed-out render (add another 30s, preserve pixels) --
-        if (render_timed_out and rl.isKeyPressed(.space)) {
-            render_timed_out = try renderMandelbrot(&image, view, false);
-            rl.updateTexture(texture, image.data);
+        // -- Space -> continue timed-out render --
+        if (self.render_timed_out and rl.isKeyPressed(.space)) {
+            _ = try self.renderFresh(false);
         }
+    }
 
-        // ============================================================
-        // Drawing
-        // ============================================================
+    fn drawFrame(self: *App) void {
         rl.beginDrawing();
         defer rl.endDrawing();
 
         rl.clearBackground(rl.Color.init(20, 20, 30, 255));
+        rl.drawTexture(self.texture, 0, 0, .white);
 
-        rl.drawTexture(texture, 0, 0, .white);
-
-        // Draw the selection rectangle (always square).
-        if (drag.active) {
-            const x0: f32 = @floatCast(@min(drag.start_x, drag.current_x));
-            const y0: f32 = @floatCast(@min(drag.start_y, drag.current_y));
-            const sz: f32 = @floatCast(@abs(drag.current_x - drag.start_x));
-
+        // Selection rectangle.
+        if (self.drag.active) {
+            const x0: f32 = @floatCast(@min(self.drag.start_x, self.drag.current_x));
+            const y0: f32 = @floatCast(@min(self.drag.start_y, self.drag.current_y));
+            const sz: f32 = @floatCast(@abs(self.drag.current_x - self.drag.start_x));
             if (sz >= MIN_SELECTION_PX) {
-                rl.drawRectangle(
-                    @intFromFloat(x0),
-                    @intFromFloat(y0),
-                    @intFromFloat(sz),
-                    @intFromFloat(sz),
-                    rl.Color.init(0, 255, 0, 40),
-                );
-                rl.drawRectangleLines(
-                    @intFromFloat(x0),
-                    @intFromFloat(y0),
-                    @intFromFloat(sz),
-                    @intFromFloat(sz),
-                    rl.Color.init(0, 255, 0, 180),
-                );
+                rl.drawRectangle(@intFromFloat(x0), @intFromFloat(y0), @intFromFloat(sz), @intFromFloat(sz), rl.Color.init(0, 255, 0, 40));
+                rl.drawRectangleLines(@intFromFloat(x0), @intFromFloat(y0), @intFromFloat(sz), @intFromFloat(sz), rl.Color.init(0, 255, 0, 180));
             }
         }
 
-        // ---- HUD ----
+        // HUD.
         var buf: [256]u8 = undefined;
         const center_text = std.fmt.bufPrintZ(
             &buf,
             "Center: ({e:.4}, {e:.4})  |  Range: {e:.4}  |  Iters: {d}",
-            .{ view.center_x, view.center_y, view.range, view.max_iters },
+            .{ self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters },
         ) catch unreachable;
 
-        const hud_top = screen_h - HUD_HEIGHT;
-        rl.drawRectangle(0, hud_top, screen_w, HUD_HEIGHT, rl.Color.init(0, 0, 0, 160));
+        const hud_top = self.screen_h - HUD_HEIGHT;
+        rl.drawRectangle(0, hud_top, self.screen_w, HUD_HEIGHT, rl.Color.init(0, 0, 0, 160));
         rl.drawText(center_text, 10, hud_top + 8, 18, rl.Color.init(200, 200, 200, 255));
         rl.drawText(
             "Drag: zoom (1:1)  |  <-: undo  ->: redo  |  R: reset  |  +/-: x2",
@@ -772,34 +747,50 @@ pub fn main() anyerror!void {
             rl.Color.init(150, 150, 150, 255),
         );
 
-        if (render_timed_out) {
-            rl.drawText(
-                "[Space]: continue rendering (30s more)",
-                10,
-                hud_top + 4,
-                12,
-                rl.Color.init(255, 200, 100, 255),
-            );
+        if (self.render_timed_out) {
+            rl.drawText("[Space]: continue rendering (30s more)", 10, hud_top + 4, 12, rl.Color.init(255, 200, 100, 255));
         }
 
         // On-screen iteration buttons.
-        const btn_y = screen_h - BTN_Y_OFFSET;
+        const btn_y = self.screen_h - BTN_Y_OFFSET;
         const mx = rl.getMouseX();
         const my = rl.getMouseY();
 
-        // [-] button (rightmost)
-        const minus_x = screen_w - BTN_GAP - BTN_SIZE;
+        const minus_x = self.screen_w - BTN_GAP - BTN_SIZE;
         const minus_hover = mx >= minus_x and mx < minus_x + BTN_SIZE and my >= btn_y and my < btn_y + BTN_SIZE;
         rl.drawRectangle(minus_x, btn_y, BTN_SIZE, BTN_SIZE, if (minus_hover) rl.Color.init(80, 80, 90, 220) else rl.Color.init(50, 50, 60, 200));
         rl.drawRectangleLines(minus_x, btn_y, BTN_SIZE, BTN_SIZE, rl.Color.init(100, 100, 110, 180));
         rl.drawText("-", minus_x + 7, btn_y + 4, 20, rl.Color.init(200, 200, 200, 255));
 
-        // [+] button
-        const plus_x = screen_w - BTN_SIZE;
+        const plus_x = self.screen_w - BTN_SIZE;
         const plus_hover = mx >= plus_x and mx < plus_x + BTN_SIZE and my >= btn_y and my < btn_y + BTN_SIZE;
         rl.drawRectangle(plus_x, btn_y, BTN_SIZE, BTN_SIZE, if (plus_hover) rl.Color.init(80, 80, 90, 220) else rl.Color.init(50, 50, 60, 200));
         rl.drawRectangleLines(plus_x, btn_y, BTN_SIZE, BTN_SIZE, rl.Color.init(100, 100, 110, 180));
         rl.drawText("+", plus_x + 8, btn_y + 4, 20, rl.Color.init(200, 200, 200, 255));
+    }
+};
+
+// ===========================================================================
+// Entry point
+// ===========================================================================
+
+pub fn main() anyerror!void {
+    rl.initWindow(DEFAULT_WIDTH, DEFAULT_HEIGHT, "Mandelbrot Set");
+    defer rl.closeWindow();
+    rl.setTargetFPS(TARGET_FPS);
+
+    var app = try App.init();
+    defer app.deinit();
+
+    // Initial render.
+    _ = try app.renderFresh(true);
+    try app.saveSnapshot();
+
+    // Main loop.
+    while (!rl.windowShouldClose()) {
+        try app.handleResize();
+        try app.handleInput();
+        app.drawFrame();
     }
 }
 
