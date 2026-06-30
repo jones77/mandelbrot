@@ -599,17 +599,16 @@ pub fn main() anyerror!void {
             }
         }
 
-        // -- Scroll wheel / +/- keys -> double/halve iterations --
+        // -- +/- keys -> double/halve iterations --
         {
-            const wheel = rl.getMouseWheelMove();
             const key_inc = rl.isKeyPressed(.equal) or rl.isKeyPressed(.kp_add);
             const key_dec = rl.isKeyPressed(.minus) or rl.isKeyPressed(.kp_subtract);
 
             var changed = false;
-            if (wheel > 0 or key_inc) {
+            if (key_inc) {
                 view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
                 changed = true;
-            } else if (wheel < 0 or key_dec) {
+            } else if (key_dec) {
                 view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
                 changed = true;
             }
@@ -685,7 +684,7 @@ pub fn main() anyerror!void {
         rl.drawRectangle(0, screen_h - 50, screen_w, 50, rl.Color.init(0, 0, 0, 160));
         rl.drawText(center_text, 10, screen_h - 42, 18, rl.Color.init(200, 200, 200, 255));
         rl.drawText(
-            "Drag: zoom (1:1)  |  <-: undo  ->: redo  |  R: reset  |  Wheel/+/-: x2",
+            "Drag: zoom (1:1)  |  <-: undo  ->: redo  |  R: reset  |  +/-: x2",
             10,
             screen_h - 22,
             14,
