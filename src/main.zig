@@ -523,7 +523,9 @@ pub fn main() anyerror!void {
             // to resolve fine detail at the Mandelbrot boundary.
             // Snaps to the next power of two (2^4 … 2^31).
             const zoom_factor = INITIAL_RANGE / view.range;
-            const target_iters = nextPowerOf2(@as(u32, @intFromFloat(zoom_factor * AUTO_SCALE_BASE)));
+            const raw_iters = zoom_factor * AUTO_SCALE_BASE;
+            const clamped = @min(raw_iters, @as(f64, @floatFromInt(MAX_ITERS_CAP)));
+            const target_iters = nextPowerOf2(@as(u32, @intFromFloat(clamped)));
             if (target_iters > view.max_iters and target_iters <= MAX_ITERS_CAP) {
                 view.max_iters = target_iters;
             }
