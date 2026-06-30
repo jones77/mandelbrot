@@ -674,7 +674,7 @@ pub fn main() anyerror!void {
         var buf: [256]u8 = undefined;
         const center_text = std.fmt.bufPrintZ(
             &buf,
-            "Center: ({d:.8}, {d:.8})  |  Range: {e:.4}  |  Iters: {d}",
+            "Center: ({e:.4}, {e:.4})  |  Range: {e:.4}  |  Iters: {d}",
             .{ view.center_x, view.center_y, view.range, view.max_iters },
         ) catch unreachable;
 
