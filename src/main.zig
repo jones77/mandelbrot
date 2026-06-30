@@ -22,8 +22,8 @@ const INITIAL_CENTER_Y: f64 = 0.0;
 const INITIAL_RANGE: f64 = 3.5;
 
 const DEFAULT_MAX_ITERS: u32 = 256;
-const MIN_ITERS: u32 = 32;
-const MAX_ITERS_CAP: u32 = 32768;
+const MIN_ITERS: u32 = 16;
+const MAX_ITERS_CAP: u32 = 2147483648; // 2^31 (2^32 overflows u32)
 const AUTO_SCALE_BASE: f64 = 80.0;
 const PALETTE_DENSITY: f64 = 4.0;
 const MAX_HISTORY: usize = 64;
@@ -301,6 +301,20 @@ fn signf(x: f64) f64 {
     return 0.0;
 }
 
+/// Smallest power of two ≥ n (or 0 if n exceeds u32 max power of two).
+fn nextPowerOf2(n: u32) u32 {
+    if (n == 0) return 1;
+    if (n > 0x80000000) return 0x80000000; // clamp to 2^31
+    var x = n;
+    x -= 1;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    return x + 1;
+}
+
 fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64) struct { x: f64, y: f64 } {
     const raw_dx = raw_mx - start_x;
     const raw_dy = raw_my - start_y;
@@ -392,7 +406,7 @@ pub fn main() anyerror!void {
                     rl.updateTexture(texture, image.data);
                 }
                 if (mx >= screen_w - 36 and mx < screen_w - 8) {
-                    view.max_iters = @min(MAX_ITERS_CAP, view.max_iters * 2);
+                    view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
                     try renderMandelbrot(&image, view);
                     rl.updateTexture(texture, image.data);
                 }
@@ -457,10 +471,11 @@ pub fn main() anyerror!void {
 
             // Auto-scale iterations: deeper zooms need more iterations
             // to resolve fine detail at the Mandelbrot boundary.
+            // Snaps to the next power of two (2^4 … 2^31).
             const zoom_factor = INITIAL_RANGE / view.range;
-            const target_iters = zoom_factor * AUTO_SCALE_BASE;
-            if (target_iters > 0 and target_iters <= MAX_ITERS_CAP) {
-                view.max_iters = @max(view.max_iters, @as(u32, @intFromFloat(target_iters)));
+            const target_iters = nextPowerOf2(@as(u32, @intFromFloat(zoom_factor * AUTO_SCALE_BASE)));
+            if (target_iters > view.max_iters and target_iters <= MAX_ITERS_CAP) {
+                view.max_iters = target_iters;
             }
 
             try renderMandelbrot(&image, view);
@@ -498,7 +513,7 @@ pub fn main() anyerror!void {
 
             var changed = false;
             if (wheel > 0 or key_inc) {
-                view.max_iters = @min(MAX_ITERS_CAP, view.max_iters * 2);
+                view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
                 changed = true;
             } else if (wheel < 0 or key_dec) {
                 view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
