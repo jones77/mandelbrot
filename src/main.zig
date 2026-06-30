@@ -328,6 +328,26 @@ pub fn main() anyerror!void {
         // Input
         // ============================================================
 
+        // -- On-screen [+] / [−] button clicks (checked before drag so
+        //    a zoom-release doesn't accidentally trigger a button) --
+        if (!drag.active and rl.isMouseButtonReleased(.left)) {
+            const mx = rl.getMouseX();
+            const my = rl.getMouseY();
+            const by = screen_h - 46;
+            if (my >= by and my < by + 28) {
+                if (mx >= screen_w - 68 and mx < screen_w - 40) {
+                    view.max_iters = @max(32, view.max_iters / 2);
+                    try renderMandelbrot(&image, view);
+                    rl.updateTexture(texture, image.data);
+                }
+                if (mx >= screen_w - 36 and mx < screen_w - 8) {
+                    view.max_iters = @min(8192, view.max_iters * 2);
+                    try renderMandelbrot(&image, view);
+                    rl.updateTexture(texture, image.data);
+                }
+            }
+        }
+
         // -- Start drag --
         if (rl.isMouseButtonPressed(.left)) {
             drag.start_x = @floatFromInt(rl.getMouseX());
@@ -394,14 +414,24 @@ pub fn main() anyerror!void {
             }
         }
 
-        // -- Scroll wheel -> adjust max iterations --
-        const wheel = rl.getMouseWheelMove();
-        if (wheel != 0) {
-            const delta: i32 = if (wheel > 0) @as(i32, 32) else -32;
-            const new_iters: i32 = @as(i32, @intCast(view.max_iters)) + delta;
-            view.max_iters = @intCast(@max(32, @min(4096, new_iters)));
-            try renderMandelbrot(&image, view);
-            rl.updateTexture(texture, image.data);
+        // -- Scroll wheel / +/- keys -> double/halve iterations --
+        {
+            const wheel = rl.getMouseWheelMove();
+            const key_inc = rl.isKeyPressed(.equal) or rl.isKeyPressed(.kp_add);
+            const key_dec = rl.isKeyPressed(.minus) or rl.isKeyPressed(.kp_subtract);
+
+            var changed = false;
+            if (wheel > 0 or key_inc) {
+                view.max_iters = @min(8192, view.max_iters * 2);
+                changed = true;
+            } else if (wheel < 0 or key_dec) {
+                view.max_iters = @max(32, view.max_iters / 2);
+                changed = true;
+            }
+            if (changed) {
+                try renderMandelbrot(&image, view);
+                rl.updateTexture(texture, image.data);
+            }
         }
 
         // -- R -> reset --
@@ -459,11 +489,32 @@ pub fn main() anyerror!void {
         rl.drawRectangle(0, screen_h - 50, screen_w, 50, rl.Color.init(0, 0, 0, 160));
         rl.drawText(center_text, 10, screen_h - 42, 18, rl.Color.init(200, 200, 200, 255));
         rl.drawText(
-            "Left-drag: zoom (1:1)  |  Del/Backspace: undo  |  R: reset  |  Wheel: +-iters",
+            "Drag: zoom (1:1)  |  Del: undo  |  R: reset  |  Wheel/+/-: x2",
             10,
             screen_h - 22,
             14,
             rl.Color.init(150, 150, 150, 255),
         );
+
+        // On-screen iteration buttons.
+        const btn_y = screen_h - 46;
+        const btn_h: i32 = 28;
+        const btn_w: i32 = 28;
+
+        // [−]
+        const mx = rl.getMouseX();
+        const my = rl.getMouseY();
+        const minus_x = screen_w - 68;
+        const minus_hover = mx >= minus_x and mx < minus_x + btn_w and my >= btn_y and my < btn_y + btn_h;
+        rl.drawRectangle(minus_x, btn_y, btn_w, btn_h, if (minus_hover) rl.Color.init(80, 80, 90, 220) else rl.Color.init(50, 50, 60, 200));
+        rl.drawRectangleLines(minus_x, btn_y, btn_w, btn_h, rl.Color.init(100, 100, 110, 180));
+        rl.drawText("-", minus_x + 7, btn_y + 4, 20, rl.Color.init(200, 200, 200, 255));
+
+        // [+]
+        const plus_x = screen_w - 36;
+        const plus_hover = mx >= plus_x and mx < plus_x + btn_w and my >= btn_y and my < btn_y + btn_h;
+        rl.drawRectangle(plus_x, btn_y, btn_w, btn_h, if (plus_hover) rl.Color.init(80, 80, 90, 220) else rl.Color.init(50, 50, 60, 200));
+        rl.drawRectangleLines(plus_x, btn_y, btn_w, btn_h, rl.Color.init(100, 100, 110, 180));
+        rl.drawText("+", plus_x + 8, btn_y + 4, 20, rl.Color.init(200, 200, 200, 255));
     }
 }
