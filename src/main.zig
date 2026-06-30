@@ -725,3 +725,125 @@ pub fn main() anyerror!void {
         rl.drawText("+", plus_x + 8, btn_y + 4, 20, rl.Color.init(200, 200, 200, 255));
     }
 }
+
+// ===========================================================================
+// Unit tests
+// ===========================================================================
+
+const testing = std.testing;
+
+test "signf" {
+    try testing.expectEqual(@as(f64, 1.0), signf(42.0));
+    try testing.expectEqual(@as(f64, 0.0), signf(0.0));
+    try testing.expectEqual(@as(f64, -1.0), signf(-3.14));
+}
+
+test "nextPowerOf2" {
+    try testing.expectEqual(@as(u32, 1), nextPowerOf2(0));
+    try testing.expectEqual(@as(u32, 1), nextPowerOf2(1));
+    try testing.expectEqual(@as(u32, 2), nextPowerOf2(2));
+    try testing.expectEqual(@as(u32, 4), nextPowerOf2(3));
+    try testing.expectEqual(@as(u32, 16), nextPowerOf2(9));
+    try testing.expectEqual(@as(u32, 16), nextPowerOf2(16));
+    try testing.expectEqual(@as(u32, 32), nextPowerOf2(17));
+    try testing.expectEqual(@as(u32, 64), nextPowerOf2(33));
+    try testing.expectEqual(@as(u32, 128), nextPowerOf2(127));
+    try testing.expectEqual(@as(u32, 65536), nextPowerOf2(65536));
+    try testing.expectEqual(@as(u32, 65536), nextPowerOf2(65535));
+    try testing.expectEqual(@as(u32, 0x80000000), nextPowerOf2(0x80000000));
+    try testing.expectEqual(@as(u32, 0x80000000), nextPowerOf2(0x80000001));
+}
+
+test "constrainDragSquare" {
+    // Simple rightward drag.
+    var sq = constrainDragSquare(100.0, 100.0, 300.0, 150.0);
+    try testing.expectEqual(@as(f64, 100.0), sq.x);
+    try testing.expectEqual(@as(f64, 100.0), sq.y);
+
+    // Simple downward drag (y is larger → size from y).
+    sq = constrainDragSquare(100.0, 100.0, 150.0, 300.0);
+    try testing.expectEqual(@as(f64, 100.0), sq.x);
+    try testing.expectEqual(@as(f64, 100.0), sq.y);
+
+    // Reverse drag (right-to-left, bottom-to-top).
+    sq = constrainDragSquare(300.0, 300.0, 100.0, 150.0);
+    try testing.expectEqual(@as(f64, 0.0), sq.x);
+    try testing.expectEqual(@as(f64, 0.0), sq.y);
+
+    // Tiny drag (< 1) → no movement.
+    sq = constrainDragSquare(100.0, 100.0, 100.5, 100.5);
+    try testing.expectEqual(@as(f64, 100.0), sq.x);
+    try testing.expectEqual(@as(f64, 100.0), sq.y);
+}
+
+test "screenToComplex round-trip" {
+    // A 900×800 window centered at (-0.5, 0) with range 3.5.
+    const view = ViewState{
+        .center_x = -0.5,
+        .center_y = 0.0,
+        .range = 3.5,
+        .max_iters = 100,
+    };
+    const w: i32 = 900;
+    const h: i32 = 800;
+    const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
+    const range_y = 3.5 / aspect;
+    const left = -0.5 - 3.5 / 2.0;
+    const top = 0.0 - range_y / 2.0;
+
+    // Centre pixel maps to the view centre.
+    var c = screenToComplex(450.0, 400.0, view, w, h);
+    try testing.expectApproxEqAbs(-0.5, c.x, 1e-12);
+    try testing.expectApproxEqAbs(0.0, c.y, 1e-12);
+
+    // Top-left corner.
+    c = screenToComplex(0.0, 0.0, view, w, h);
+    try testing.expectApproxEqAbs(left, c.x, 1e-12);
+    try testing.expectApproxEqAbs(top, c.y, 1e-12);
+}
+
+test "hslToRgb known values" {
+    // White: h=any, s=0, l=1.
+    var rgb = hslToRgb(0.0, 0.0, 1.0);
+    try testing.expectEqual(@as(u8, 255), rgb.r);
+    try testing.expectEqual(@as(u8, 255), rgb.g);
+    try testing.expectEqual(@as(u8, 255), rgb.b);
+
+    // Black: h=any, s=0, l=0.
+    rgb = hslToRgb(0.0, 0.0, 0.0);
+    try testing.expectEqual(@as(u8, 0), rgb.r);
+    try testing.expectEqual(@as(u8, 0), rgb.g);
+    try testing.expectEqual(@as(u8, 0), rgb.b);
+
+    // Pure red: h=0, s=1, l=0.5.
+    rgb = hslToRgb(0.0, 1.0, 0.5);
+    try testing.expectEqual(@as(u8, 255), rgb.r);
+    try testing.expectEqual(@as(u8, 0), rgb.g);
+    try testing.expectEqual(@as(u8, 0), rgb.b);
+
+    // Pure green: h=120, s=1, l=0.5.
+    rgb = hslToRgb(120.0, 1.0, 0.5);
+    try testing.expectEqual(@as(u8, 0), rgb.r);
+    try testing.expectEqual(@as(u8, 255), rgb.g);
+    try testing.expectEqual(@as(u8, 0), rgb.b);
+
+    // Pure blue: h=240, s=1, l=0.5.
+    rgb = hslToRgb(240.0, 1.0, 0.5);
+    try testing.expectEqual(@as(u8, 0), rgb.r);
+    try testing.expectEqual(@as(u8, 0), rgb.g);
+    try testing.expectEqual(@as(u8, 255), rgb.b);
+}
+
+test "smoothColor inside set" {
+    // mu >= max_iters → black.
+    try testing.expectEqual(rl.Color.black, smoothColor(100.0, 100));
+    try testing.expectEqual(rl.Color.black, smoothColor(999.0, 100));
+}
+
+test "buildPalette all valid" {
+    buildPalette();
+    for (palette) |c| {
+        // Alpha must be 255 for every palette entry.
+        try testing.expectEqual(@as(u8, 255), c.a);
+    }
+}

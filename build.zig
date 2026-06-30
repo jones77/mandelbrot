@@ -25,6 +25,12 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // ---- Test step ----
+    const test_step = b.addTest(.{ .root_module = exe_mod });
+    const test_run = b.step("test", "Run unit tests");
+    test_run.dependOn(&test_step.step);
+
+    // ---- Run step ----
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
