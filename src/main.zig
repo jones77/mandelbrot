@@ -26,6 +26,40 @@ const MAX_HISTORY: usize = 64;
 const MIN_SELECTION_PX: f64 = 8.0;
 const TARGET_FPS: i32 = 60;
 const PALETTE_SIZE: usize = 1024;
+const MAX_RENDER_THREADS: usize = 8;
+
+// ===========================================================================
+// Types
+// ===========================================================================
+
+const ViewState = struct {
+    center_x: f64,
+    center_y: f64,
+    range: f64,
+    max_iters: u32,
+};
+
+const DragState = struct {
+    start_x: f64,
+    start_y: f64,
+    current_x: f64,
+    current_y: f64,
+    active: bool,
+};
+
+/// Per-thread context for rendering a horizontal strip of the image.
+const RenderStrip = struct {
+    pixels: []u8,
+    w: usize,
+    h: usize,
+    start_row: usize,
+    end_row: usize,
+    left: f64,
+    top: f64,
+    range_x: f64,
+    range_y: f64,
+    max_iters: u32,
+};
 
 // ===========================================================================
 // Colour palette
@@ -81,16 +115,65 @@ fn hslToRgb(h: f32, s: f32, l: f32) rl.Color {
 }
 
 fn iterationColor(iter: u32, max_iters: u32) rl.Color {
-    if (iter == max_iters) return .black;
+    if (iter >= max_iters) return .black;
     const idx = iter % @as(u32, @intCast(PALETTE_SIZE));
     return palette[idx];
 }
 
 // ===========================================================================
-// Mandelbrot computation
+// Mandelbrot computation (multi-threaded)
 // ===========================================================================
 
-fn renderMandelbrot(image: *rl.Image, view: anytype) void {
+/// Render rows [start_row, end_row) into the shared pixel buffer.
+/// The image starts black; we only write pixels for escaped points.
+fn renderStrip(ctx: *RenderStrip) void {
+    const w = ctx.w;
+    const h = ctx.h;
+    const max_iters = ctx.max_iters;
+
+    var py = ctx.start_row;
+    while (py < ctx.end_row) : (py += 1) {
+        const cy = ctx.top + @as(f64, @floatFromInt(py)) * ctx.range_y / @as(f64, @floatFromInt(h -| 1));
+        const cy2 = cy * cy;
+
+        var px: usize = 0;
+        while (px < w) : (px += 1) {
+            const cx = ctx.left + @as(f64, @floatFromInt(px)) * ctx.range_x / @as(f64, @floatFromInt(w -| 1));
+
+            // Periodicity checking — skip iteration for points deep inside
+            // the main cardioid or the period-2 bulb (saves millions of
+            // iterations in the initial view and shallow zooms).
+            const q = (cx - 0.25) * (cx - 0.25) + cy2;
+            if (q * (q + (cx - 0.25)) <= 0.25 * cy2) continue;
+            if ((cx + 1.0) * (cx + 1.0) + cy2 <= 0.0625) continue;
+
+            var zx: f64 = 0.0;
+            var zy: f64 = 0.0;
+            var iter: u32 = 0;
+
+            while (iter < max_iters) : (iter += 1) {
+                const zx2 = zx * zx;
+                const zy2 = zy * zy;
+                if (zx2 + zy2 > 4.0) break;
+                zy = 2.0 * zx * zy + cy;
+                zx = zx2 - zy2 + cx;
+            }
+
+            // Point never escaped → leave black.
+            if (iter >= max_iters) continue;
+
+            const color = iterationColor(iter, max_iters);
+            const idx = (py * w + px) * 4;
+            ctx.pixels[idx + 0] = color.r;
+            ctx.pixels[idx + 1] = color.g;
+            ctx.pixels[idx + 2] = color.b;
+            ctx.pixels[idx + 3] = color.a;
+        }
+    }
+}
+
+/// Render the Mandelbrot set across multiple CPU cores.
+fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
     const w: usize = @intCast(image.width);
     const h: usize = @intCast(image.height);
 
@@ -102,33 +185,31 @@ fn renderMandelbrot(image: *rl.Image, view: anytype) void {
 
     const pixels = @as([*]u8, @ptrCast(image.data))[0 .. w * h * 4];
 
-    var py: usize = 0;
-    while (py < h) : (py += 1) {
-        const cy = top + @as(f64, @floatFromInt(py)) * range_y / @as(f64, @floatFromInt(h -| 1));
+    // Determine thread count: at most MAX_RENDER_THREADS, and at least 32 rows each.
+    var num_threads: usize = h / 32;
+    if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
+    if (num_threads < 1) num_threads = 1;
 
-        var px: usize = 0;
-        while (px < w) : (px += 1) {
-            const cx = left + @as(f64, @floatFromInt(px)) * range_x / @as(f64, @floatFromInt(w -| 1));
+    var strips: [MAX_RENDER_THREADS]RenderStrip = undefined;
+    var threads: [MAX_RENDER_THREADS]std.Thread = undefined;
 
-            var zx: f64 = 0.0;
-            var zy: f64 = 0.0;
-            var iter: u32 = 0;
-
-            while (iter < view.max_iters) : (iter += 1) {
-                const zx2 = zx * zx;
-                const zy2 = zy * zy;
-                if (zx2 + zy2 > 4.0) break;
-                zy = 2.0 * zx * zy + cy;
-                zx = zx2 - zy2 + cx;
-            }
-
-            const color = iterationColor(iter, view.max_iters);
-            const idx = (py * w + px) * 4;
-            pixels[idx + 0] = color.r;
-            pixels[idx + 1] = color.g;
-            pixels[idx + 2] = color.b;
-            pixels[idx + 3] = color.a;
-        }
+    for (0..num_threads) |i| {
+        strips[i] = RenderStrip{
+            .pixels = pixels,
+            .w = w,
+            .h = h,
+            .start_row = (h * i) / num_threads,
+            .end_row = (h * (i + 1)) / num_threads,
+            .left = left,
+            .top = top,
+            .range_x = range_x,
+            .range_y = range_y,
+            .max_iters = view.max_iters,
+        };
+        threads[i] = try std.Thread.spawn(.{}, renderStrip, .{&strips[i]});
+    }
+    for (0..num_threads) |i| {
+        threads[i].join();
     }
 }
 
@@ -139,7 +220,7 @@ fn renderMandelbrot(image: *rl.Image, view: anytype) void {
 fn screenToComplex(
     sx: f64,
     sy: f64,
-    view: anytype,
+    view: ViewState,
     img_w: i32,
     img_h: i32,
 ) struct { x: f64, y: f64 } {
@@ -183,19 +264,14 @@ fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64) str
 pub fn main() anyerror!void {
     buildPalette();
 
-    var view = struct {
-        center_x: f64,
-        center_y: f64,
-        range: f64,
-        max_iters: u32,
-    }{
+    var view = ViewState{
         .center_x = INITIAL_CENTER_X,
         .center_y = INITIAL_CENTER_Y,
         .range = INITIAL_RANGE,
         .max_iters = DEFAULT_MAX_ITERS,
     };
 
-    var history: [MAX_HISTORY]@TypeOf(view) = undefined;
+    var history: [MAX_HISTORY]ViewState = undefined;
     var history_len: usize = 0;
 
     // ---- Window ----
@@ -213,13 +289,7 @@ pub fn main() anyerror!void {
     var texture = try rl.loadTextureFromImage(image);
     defer rl.unloadTexture(texture);
 
-    var drag = struct {
-        start_x: f64,
-        start_y: f64,
-        current_x: f64,
-        current_y: f64,
-        active: bool,
-    }{
+    var drag = DragState{
         .start_x = 0,
         .start_y = 0,
         .current_x = 0,
@@ -228,7 +298,7 @@ pub fn main() anyerror!void {
     };
 
     // ---- Initial render ----
-    renderMandelbrot(&image, view);
+    try renderMandelbrot(&image, view);
     rl.updateTexture(texture, image.data);
 
     // ---- Main loop ----
@@ -246,7 +316,7 @@ pub fn main() anyerror!void {
             image = rl.genImageColor(screen_w, screen_h, .black);
             texture = try rl.loadTextureFromImage(image);
 
-            renderMandelbrot(&image, view);
+            try renderMandelbrot(&image, view);
             rl.updateTexture(texture, image.data);
         }
 
@@ -306,7 +376,7 @@ pub fn main() anyerror!void {
                 view.max_iters = @max(view.max_iters, @as(u32, @intFromFloat(target_iters)));
             }
 
-            renderMandelbrot(&image, view);
+            try renderMandelbrot(&image, view);
             rl.updateTexture(texture, image.data);
         }
 
@@ -315,7 +385,7 @@ pub fn main() anyerror!void {
             if (history_len > 0) {
                 history_len -= 1;
                 view = history[history_len];
-                renderMandelbrot(&image, view);
+                try renderMandelbrot(&image, view);
                 rl.updateTexture(texture, image.data);
             }
         }
@@ -326,7 +396,7 @@ pub fn main() anyerror!void {
             const delta: i32 = if (wheel > 0) @as(i32, 32) else -32;
             const new_iters: i32 = @as(i32, @intCast(view.max_iters)) + delta;
             view.max_iters = @intCast(@max(32, @min(4096, new_iters)));
-            renderMandelbrot(&image, view);
+            try renderMandelbrot(&image, view);
             rl.updateTexture(texture, image.data);
         }
 
@@ -336,7 +406,7 @@ pub fn main() anyerror!void {
             view.center_y = INITIAL_CENTER_Y;
             view.range = INITIAL_RANGE;
             history_len = 0;
-            renderMandelbrot(&image, view);
+            try renderMandelbrot(&image, view);
             rl.updateTexture(texture, image.data);
         }
 
