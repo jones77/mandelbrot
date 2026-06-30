@@ -114,10 +114,26 @@ fn hslToRgb(h: f32, s: f32, l: f32) rl.Color {
     );
 }
 
-fn iterationColor(iter: u32, max_iters: u32) rl.Color {
-    if (iter >= max_iters) return .black;
-    const idx = iter % @as(u32, @intCast(PALETTE_SIZE));
-    return palette[idx];
+/// Smooth (continuous) iteration colour.  `mu` is the fractional
+/// iteration count from the escape-time formula.  The palette cycles
+/// on a fixed scale (every ~200 iterations) so that increasing the
+/// iteration limit adds detail without shifting existing colours.
+fn smoothColor(mu: f64, max_iters: u32) rl.Color {
+    if (mu >= @as(f64, @floatFromInt(max_iters))) return .black;
+    const scale: f64 = 200.0;
+    const raw = mu / scale;
+    const idx = @as(usize, @intFromFloat(@mod(raw, @as(f64, @floatFromInt(PALETTE_SIZE)))));
+    const frac = raw - @floor(raw);
+    const next = (idx + 1) % PALETTE_SIZE;
+
+    const c0 = palette[idx];
+    const c1 = palette[next];
+    return rl.Color.init(
+        @intFromFloat(@round(@as(f64, @floatFromInt(c0.r)) * (1.0 - frac) + @as(f64, @floatFromInt(c1.r)) * frac)),
+        @intFromFloat(@round(@as(f64, @floatFromInt(c0.g)) * (1.0 - frac) + @as(f64, @floatFromInt(c1.g)) * frac)),
+        @intFromFloat(@round(@as(f64, @floatFromInt(c0.b)) * (1.0 - frac) + @as(f64, @floatFromInt(c1.b)) * frac)),
+        255,
+    );
 }
 
 // ===========================================================================
@@ -140,9 +156,6 @@ fn renderStrip(ctx: *RenderStrip) void {
         while (px < w) : (px += 1) {
             const cx = ctx.left + @as(f64, @floatFromInt(px)) * ctx.range_x / @as(f64, @floatFromInt(w -| 1));
 
-            // Periodicity checking — skip iteration for points deep inside
-            // the main cardioid or the period-2 bulb (saves millions of
-            // iterations in the initial view and shallow zooms).
             const q = (cx - 0.25) * (cx - 0.25) + cy2;
             if (q * (q + (cx - 0.25)) <= 0.25 * cy2) continue;
             if ((cx + 1.0) * (cx + 1.0) + cy2 <= 0.0625) continue;
@@ -151,23 +164,28 @@ fn renderStrip(ctx: *RenderStrip) void {
             var zy: f64 = 0.0;
             var iter: u32 = 0;
 
-            while (iter < max_iters) : (iter += 1) {
+            // Using the while-else expression: `break` provides the smooth
+            // iteration count on escape, `else` provides the limit when the
+            // point never escapes (inside the set → leave black).
+            const mu = while (iter < max_iters) : (iter += 1) {
                 const zx2 = zx * zx;
                 const zy2 = zy * zy;
-                if (zx2 + zy2 > 4.0) break;
+                if (zx2 + zy2 > 4.0) {
+                    const log_mag = 0.5 * @log(zx2 + zy2);
+                    break @as(f64, @floatFromInt(iter)) + 1.0 - @log(log_mag) / @log(2.0);
+                }
                 zy = 2.0 * zx * zy + cy;
                 zx = zx2 - zy2 + cx;
-            }
+            } else @as(f64, @floatFromInt(max_iters));
 
-            // Point never escaped → leave black.
-            if (iter >= max_iters) continue;
+            if (mu >= @as(f64, @floatFromInt(max_iters))) continue;
 
-            const color = iterationColor(iter, max_iters);
-            const idx = (py * w + px) * 4;
-            ctx.pixels[idx + 0] = color.r;
-            ctx.pixels[idx + 1] = color.g;
-            ctx.pixels[idx + 2] = color.b;
-            ctx.pixels[idx + 3] = color.a;
+            const color = smoothColor(mu, max_iters);
+            const pix_idx = (py * w + px) * 4;
+            ctx.pixels[pix_idx + 0] = color.r;
+            ctx.pixels[pix_idx + 1] = color.g;
+            ctx.pixels[pix_idx + 2] = color.b;
+            ctx.pixels[pix_idx + 3] = color.a;
         }
     }
 }
