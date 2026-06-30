@@ -31,6 +31,7 @@ const MIN_SELECTION_PX: f64 = 8.0;
 const TARGET_FPS: i32 = 60;
 const PALETTE_SIZE: usize = 1024;
 const MAX_RENDER_THREADS: usize = 8;
+const RENDER_TIMEOUT_S: f64 = 30.0;
 
 // ===========================================================================
 // Types
@@ -75,6 +76,10 @@ const RenderStrip = struct {
     /// When true, skip the per-pixel cardioid/bulb interior tests because
     /// the entire view is outside the bounding box of those shapes.
     skip_periodicity: bool,
+    /// Wall-clock deadline in seconds (via rl.getTime); zero means no limit.
+    deadline_s: f64,
+    /// Set to true by the worker when it stops due to timeout.
+    timed_out: bool,
 };
 
 // ===========================================================================
@@ -164,6 +169,12 @@ fn renderStrip(ctx: *RenderStrip) void {
 
     var py = ctx.start_row;
     while (py < ctx.end_row) : (py += 1) {
+        // Check timeout every row.
+        if (ctx.deadline_s > 0 and rl.getTime() >= ctx.deadline_s) {
+            ctx.timed_out = true;
+            return;
+        }
+
         const cy = ctx.top + @as(f64, @floatFromInt(py)) * ctx.range_y / @as(f64, @floatFromInt(h -| 1));
         const cy2 = cy * cy;
 
@@ -239,6 +250,8 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
     const skip_periodicity = (view_right < -1.25 or view_left > 0.25 or
         view_bottom < -box_ymax or view_top > box_ymax);
 
+    const deadline_s = rl.getTime() + RENDER_TIMEOUT_S;
+
     // Determine thread count: at most MAX_RENDER_THREADS, and at least 32 rows each.
     var num_threads: usize = h / 32;
     if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
@@ -260,11 +273,32 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
             .range_y = range_y,
             .max_iters = view.max_iters,
             .skip_periodicity = skip_periodicity,
+            .deadline_s = deadline_s,
+            .timed_out = false,
         };
         threads[i] = try std.Thread.spawn(.{}, renderStrip, .{&strips[i]});
     }
     for (0..num_threads) |i| {
         threads[i].join();
+    }
+
+    // Log if any thread timed out.
+    for (0..num_threads) |i| {
+        if (strips[i].timed_out) {
+            std.debug.print(
+                \\TIMEOUT: Mandelbrot render exceeded {d:.0}s
+                \\  To recreate: center=({d:.16}, {d:.16})
+                \\  range={e:.4}  iters={d}
+                \\
+            , .{
+                RENDER_TIMEOUT_S,
+                view.center_x,
+                view.center_y,
+                view.range,
+                view.max_iters,
+            });
+            break;
+        }
     }
 }
 
