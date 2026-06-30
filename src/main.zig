@@ -32,14 +32,44 @@ const MIN_SELECTION_PX: f64 = 8.0;
 const TARGET_FPS: i32 = 60;
 const PALETTE_SIZE: usize = 1024;
 const MAX_RENDER_THREADS: usize = 8;
+const MIN_ROWS_PER_THREAD: usize = 32;
 const RENDER_TIMEOUT_S: f64 = 30.0;
 const CARDIOID_Y_MAX: f64 = 3.0 * @sqrt(3.0) / 8.0;
-const INTERIOR_EPSILON_SQ: f32 = 1e-6; // derivative ≈ 0 → inside M
-const PERIODICITY_EPSILON_SQ: f32 = 1e-8; // |z_{n+k} - z_n|² → orbit periodic
+const INTERIOR_EPSILON_SQ: f32 = 1e-6;   // |(P^n)'(c)|² < ε → inside M
+const PERIODICITY_EPSILON_SQ: f32 = 1e-8; // |z_{n+k} - z_n|² < ε → periodic
+
+// ---- UI layout constants ----
+const HUD_HEIGHT: i32 = 50;
+const BTN_SIZE: i32 = 28;
+const BTN_Y_OFFSET: i32 = 46; // from screen_h
+const BTN_GAP: i32 = 32;      // centre-to-centre spacing of [+] [-]
 
 // ===========================================================================
 // Types
 // ===========================================================================
+
+/// A point in the complex plane (f64, for view-level math).
+const ComplexPoint = struct { x: f64, y: f64 };
+
+/// A coordinate pair in f32, used inside the per-pixel hot loop.
+const Coord = struct {
+    re: f32,
+    im: f32,
+
+    fn normSq(self: Coord) f32 {
+        return self.re * self.re + self.im * self.im;
+    }
+
+    fn sq(self: Coord) Coord {
+        return .{
+            .re = self.re * self.re - self.im * self.im,
+            .im = 2.0 * self.re * self.im,
+        };
+    }
+};
+
+/// A single escape-time orbit value (for periodicity detection).
+const OrbitPoint = struct { zx: f32, zy: f32 };
 
 const ViewState = struct {
     center_x: f64,
@@ -198,17 +228,14 @@ fn renderStrip(ctx: *RenderStrip) void {
             // Start from z=c (not z=0) so we can track the derivative
             // (P^n)'(c).  For points inside M the derivative shrinks
             // toward zero — we detect that early and stop iterating.
-            var zx: f32 = cx;
-            var zy: f32 = cy;
-            var dx: f32 = 1.0;
-            var dy: f32 = 0.0;
+            var z = Coord{ .re = cx, .im = cy };
+            var der = Coord{ .re = 1.0, .im = 0.0 };
             var iter: u32 = 0;
 
             // Periodicity orbit detection: store z at power-of-2
             // iteration counts (1, 2, 4, 8, …).  If z ever returns to
             // within ε of a stored value, the orbit is periodic → M.
-            var orbit_zx: [32]f32 = undefined;
-            var orbit_zy: [32]f32 = undefined;
+            var orbit_stored: [32]OrbitPoint = undefined;
             var orbit_n: u32 = 0;
 
             // Using the while-else expression: `break` provides the smooth
@@ -216,13 +243,11 @@ fn renderStrip(ctx: *RenderStrip) void {
             // point never escapes (inside the set → leave black).
             const mu: f32 = while (iter < max_iters) : (iter += 1) {
                 // Derivative-based interior detection: (P^n)'(c) → 0.
-                if (dx * dx + dy * dy < INTERIOR_EPSILON_SQ) {
+                if (der.normSq() < INTERIOR_EPSILON_SQ) {
                     break @as(f32, @floatFromInt(max_iters));
                 }
-                const zx2 = zx * zx;
-                const zy2 = zy * zy;
-                if (zx2 + zy2 > 4.0) {
-                    const log_mag = 0.5 * @log(zx2 + zy2);
+                if (z.normSq() > 4.0) {
+                    const log_mag = 0.5 * @log(z.normSq());
                     break @as(f32, @floatFromInt(iter)) + 1.0 - @log(log_mag) / @log(2.0);
                 }
                 // Orbit periodicity detection: check if z matches a
@@ -230,8 +255,8 @@ fn renderStrip(ctx: *RenderStrip) void {
                 {
                     var periodic = false;
                     for (0..orbit_n) |j| {
-                        const dzx = zx - orbit_zx[j];
-                        const dzy = zy - orbit_zy[j];
+                        const dzx = z.re - orbit_stored[j].zx;
+                        const dzy = z.im - orbit_stored[j].zy;
                         if (dzx * dzx + dzy * dzy < PERIODICITY_EPSILON_SQ) {
                             periodic = true;
                             break;
@@ -241,18 +266,19 @@ fn renderStrip(ctx: *RenderStrip) void {
                 }
                 // Store z at power-of-2 iterations (1, 2, 4, 8, …).
                 if (iter + 1 == (@as(u32, 1) << @as(u5, @intCast(orbit_n)))) {
-                    orbit_zx[orbit_n] = zx;
-                    orbit_zy[orbit_n] = zy;
+                    orbit_stored[orbit_n] = .{ .zx = z.re, .zy = z.im };
                     orbit_n += 1;
                 }
                 // Update derivative BEFORE z (order matters).
-                const ndx = 2.0 * (zx * dx - zy * dy);
-                const ndy = 2.0 * (zx * dy + zy * dx);
-                dx = ndx;
-                dy = ndy;
-                // Update z.
-                zy = 2.0 * zx * zy + cy;
-                zx = zx2 - zy2 + cx;
+                der = Coord{
+                    .re = 2.0 * (z.re * der.re - z.im * der.im),
+                    .im = 2.0 * (z.re * der.im + z.im * der.re),
+                };
+                // Update z: z = z² + c
+                z = Coord{
+                    .re = z.re * z.re - z.im * z.im + cx,
+                    .im = 2.0 * z.re * z.im + cy,
+                };
             } else @as(f32, @floatFromInt(max_iters));
 
             if (mu >= @as(f32, @floatFromInt(max_iters))) continue;
@@ -306,8 +332,8 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState, clear: bool) !bool {
 
     const deadline_s = rl.getTime() + RENDER_TIMEOUT_S;
 
-    // Determine thread count: at most MAX_RENDER_THREADS, and at least 32 rows each.
-    var num_threads: usize = h / 32;
+    // Determine thread count: at most MAX_RENDER_THREADS, and at least MIN_ROWS_PER_THREAD each.
+    var num_threads: usize = h / MIN_ROWS_PER_THREAD;
     if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
     if (num_threads < 1) num_threads = 1;
 
@@ -367,7 +393,7 @@ fn screenToComplex(
     view: ViewState,
     img_w: i32,
     img_h: i32,
-) struct { x: f64, y: f64 } {
+) ComplexPoint {
     const aspect = @as(f64, @floatFromInt(img_w)) / @as(f64, @floatFromInt(img_h));
     const range_x = view.range;
     const range_y = view.range / aspect;
@@ -398,7 +424,7 @@ fn nextPowerOf2(n: u32) u32 {
     return x + 1;
 }
 
-fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64) struct { x: f64, y: f64 } {
+fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64) ComplexPoint {
     const raw_dx = raw_mx - start_x;
     const raw_dy = raw_my - start_y;
     const size = @max(@abs(raw_dx), @abs(raw_dy));
@@ -500,14 +526,16 @@ pub fn main() anyerror!void {
         if (!drag.active and rl.isMouseButtonReleased(.left)) {
             const mx = rl.getMouseX();
             const my = rl.getMouseY();
-            const by = screen_h - 46;
-            if (my >= by and my < by + 28) {
-                if (mx >= screen_w - 68 and mx < screen_w - 40) {
+            const by = screen_h - BTN_Y_OFFSET;
+            if (my >= by and my < by + BTN_SIZE) {
+                // Minus button (rightmost)
+                if (mx >= screen_w - BTN_GAP - BTN_SIZE and mx < screen_w - BTN_GAP) {
                     view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
                     render_timed_out = try renderMandelbrot(&image, view, true);
                     rl.updateTexture(texture, image.data);
                 }
-                if (mx >= screen_w - 36 and mx < screen_w - 8) {
+                // Plus button
+                if (mx >= screen_w - BTN_SIZE and mx < screen_w) {
                     view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
                     render_timed_out = try renderMandelbrot(&image, view, true);
                     rl.updateTexture(texture, image.data);
@@ -725,12 +753,13 @@ pub fn main() anyerror!void {
             .{ view.center_x, view.center_y, view.range, view.max_iters },
         ) catch unreachable;
 
-        rl.drawRectangle(0, screen_h - 50, screen_w, 50, rl.Color.init(0, 0, 0, 160));
-        rl.drawText(center_text, 10, screen_h - 42, 18, rl.Color.init(200, 200, 200, 255));
+        const hud_top = screen_h - HUD_HEIGHT;
+        rl.drawRectangle(0, hud_top, screen_w, HUD_HEIGHT, rl.Color.init(0, 0, 0, 160));
+        rl.drawText(center_text, 10, hud_top + 8, 18, rl.Color.init(200, 200, 200, 255));
         rl.drawText(
             "Drag: zoom (1:1)  |  <-: undo  ->: redo  |  R: reset  |  +/-: x2",
             10,
-            screen_h - 22,
+            hud_top + 28,
             14,
             rl.Color.init(150, 150, 150, 255),
         );
@@ -739,31 +768,29 @@ pub fn main() anyerror!void {
             rl.drawText(
                 "[Space]: continue rendering (30s more)",
                 10,
-                screen_h - 46,
+                hud_top + 4,
                 12,
                 rl.Color.init(255, 200, 100, 255),
             );
         }
 
         // On-screen iteration buttons.
-        const btn_y = screen_h - 46;
-        const btn_h: i32 = 28;
-        const btn_w: i32 = 28;
-
-        // [−]
+        const btn_y = screen_h - BTN_Y_OFFSET;
         const mx = rl.getMouseX();
         const my = rl.getMouseY();
-        const minus_x = screen_w - 68;
-        const minus_hover = mx >= minus_x and mx < minus_x + btn_w and my >= btn_y and my < btn_y + btn_h;
-        rl.drawRectangle(minus_x, btn_y, btn_w, btn_h, if (minus_hover) rl.Color.init(80, 80, 90, 220) else rl.Color.init(50, 50, 60, 200));
-        rl.drawRectangleLines(minus_x, btn_y, btn_w, btn_h, rl.Color.init(100, 100, 110, 180));
+
+        // [-] button (rightmost)
+        const minus_x = screen_w - BTN_GAP - BTN_SIZE;
+        const minus_hover = mx >= minus_x and mx < minus_x + BTN_SIZE and my >= btn_y and my < btn_y + BTN_SIZE;
+        rl.drawRectangle(minus_x, btn_y, BTN_SIZE, BTN_SIZE, if (minus_hover) rl.Color.init(80, 80, 90, 220) else rl.Color.init(50, 50, 60, 200));
+        rl.drawRectangleLines(minus_x, btn_y, BTN_SIZE, BTN_SIZE, rl.Color.init(100, 100, 110, 180));
         rl.drawText("-", minus_x + 7, btn_y + 4, 20, rl.Color.init(200, 200, 200, 255));
 
-        // [+]
-        const plus_x = screen_w - 36;
-        const plus_hover = mx >= plus_x and mx < plus_x + btn_w and my >= btn_y and my < btn_y + btn_h;
-        rl.drawRectangle(plus_x, btn_y, btn_w, btn_h, if (plus_hover) rl.Color.init(80, 80, 90, 220) else rl.Color.init(50, 50, 60, 200));
-        rl.drawRectangleLines(plus_x, btn_y, btn_w, btn_h, rl.Color.init(100, 100, 110, 180));
+        // [+] button
+        const plus_x = screen_w - BTN_SIZE;
+        const plus_hover = mx >= plus_x and mx < plus_x + BTN_SIZE and my >= btn_y and my < btn_y + BTN_SIZE;
+        rl.drawRectangle(plus_x, btn_y, BTN_SIZE, BTN_SIZE, if (plus_hover) rl.Color.init(80, 80, 90, 220) else rl.Color.init(50, 50, 60, 200));
+        rl.drawRectangleLines(plus_x, btn_y, BTN_SIZE, BTN_SIZE, rl.Color.init(100, 100, 110, 180));
         rl.drawText("+", plus_x + 8, btn_y + 4, 20, rl.Color.init(200, 200, 200, 255));
     }
 }
