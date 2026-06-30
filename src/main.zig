@@ -339,12 +339,6 @@ fn screenToComplex(
 // Helpers
 // ===========================================================================
 
-fn signf(x: f64) f64 {
-    if (x > 0) return 1.0;
-    if (x < 0) return -1.0;
-    return 0.0;
-}
-
 /// Smallest power of two ≥ n (or 0 if n exceeds u32 max power of two).
 fn nextPowerOf2(n: u32) u32 {
     if (n == 0) return 1;
@@ -364,9 +358,10 @@ fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64) str
     const raw_dy = raw_my - start_y;
     const size = @max(@abs(raw_dx), @abs(raw_dy));
     if (size < 1.0) return .{ .x = start_x, .y = start_y };
+    // Inline sign: use copysign to apply the sign of raw_dx/raw_dy to `size`.
     return .{
-        .x = start_x + signf(raw_dx) * size,
-        .y = start_y + signf(raw_dy) * size,
+        .x = start_x + std.math.copysign(size, raw_dx),
+        .y = start_y + std.math.copysign(size, raw_dy),
     };
 }
 
@@ -731,12 +726,6 @@ pub fn main() anyerror!void {
 // ===========================================================================
 
 const testing = std.testing;
-
-test "signf" {
-    try testing.expectEqual(@as(f64, 1.0), signf(42.0));
-    try testing.expectEqual(@as(f64, 0.0), signf(0.0));
-    try testing.expectEqual(@as(f64, -1.0), signf(-3.14));
-}
 
 test "nextPowerOf2" {
     try testing.expectEqual(@as(u32, 1), nextPowerOf2(0));
