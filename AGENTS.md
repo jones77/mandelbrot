@@ -28,12 +28,46 @@ Future agents should focus on the visualization modes.
 - Multi-threaded rendering (up to 8 threads, horizontal striping)
 - Cardioid/bulb periodicity pre-checks with bounding-box rejection
 - Derivative-based interior detection (Section 3.4 of Chéritat)
+- Periodicity orbit detection (Bolt's method — stores z at power-of-2 iterations)
+- f32 inner loop (was f64 — 2× SIMD width, better cache)
 - Undo/redo history with cached pixel buffers (←/→ keys)
 - Power-of-2 iteration scaling (2^4 … 2^16, auto-scale on zoom)
 - 30-second render timeout with Space-to-continue
 - Unit tests for pure functions (`zig build test`)
 
-## Future work: Visualization modes
+## Future optimizations
+
+### Perturbation theory (major speedup for deep zooms)
+
+For very deep zooms (range < 1e-6), all pixel coordinates are within a tiny
+neighbourhood of the reference point (usually the view centre).  The idea:
+
+1. Compute one **reference orbit** `Z_n` in full f64/precision from the centre point.
+2. For each pixel, compute only the **offset** `δ_n = z_n - Z_n` using the
+   recurrence `δ_{n+1} = 2·Z_n·δ_n + δ_n² + δ_c`, where `δ_c = c - C` is
+   the tiny pixel-to-reference offset in the complex plane.
+3. When a pixel's offset grows large enough to escape (`|Z_n + δ_n| > 2`),
+   the point is outside M.
+4. When a pixel's offset grows larger than a glitch threshold (e.g.,
+   `|δ_n| > |Z_n| / 1000`), the approximation breaks down — mark the pixel
+   for "rebasing" to a new reference.
+
+Reference: Chéritat Section 3.4 mentions "images and speed" improvements from
+interior detection but does not detail perturbation.  See K. I. Martin's
+"Perturbation theory for the Mandelbrot set" (2013) for the standard algorithm.
+
+**Implementation sketch:**
+- Store the full reference orbit (Z_n, n=0..max_iters) as an array of `(zx, zy)` pairs.
+- Allocate ~8 MB for a 65536-iteration f32 reference orbit.
+- The per-pixel inner loop uses f32 for δ_n, δ_c.  Runs ~10× faster since
+  δ_n stays small (fewer bits to multiply).
+- Glitch detection requires a separate pass or deferred rebase queue.
+- Compatibility with the existing derivative interior detection: the reference
+  orbit's derivative `D_n` must also be stored (or recomputed).
+
+**Status:** Not yet implemented.  A significant architectural change — requires
+pre-computing the reference orbit before spawnning render threads, and modifying
+`renderStrip` to accept the reference data.
 
 Per the Chéritat document, the following visualization modes should be added.
 Each mode has a name, a short description, and a reference to the document section.
