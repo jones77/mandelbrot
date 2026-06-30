@@ -170,16 +170,18 @@ Implementation approach:
 ## Code review TODO items
 
 - [ ] Extract the 30s timeout warning text ("TIMEOUT: ...") into a constant or helper
-- [ ] The `while` loop variables `zx`, `zy`, `dx`, `dy` in `renderStrip` could be a struct
 - [ ] `INTERIOR_EPSILON_SQ` may need tuning at very deep zooms (the document notes
       that epsilon=0.1 sometimes gives false positives near parabolic parameters)
 - [ ] The `hslToRgb` function uses `f32` but the Mandelbrot math uses `f64` — this
       is fine for the palette (computed once) but could be noted
-- [ ] `constrainDragSquare` result struct is anonymous — could be named
-- [ ] Button position constants (`screen_w - 68`, `-46`, `28`, etc.) could be grouped
-      into a UI layout struct
 - [ ] Window resize invalidates pixel cache silently — a small "Resize clears history"
       hint in the HUD would help (low priority)
+
+**Already fixed in earlier sessions:**
+- [x] `zx`/`zy`/`dx`/`dy` in `renderStrip` → refactored into `Coord` struct with `normSq()` and `sq()`
+- [x] `constrainDragSquare` return type → named `ComplexPoint` (was anonymous struct)
+- [x] Button position constants (`screen_w - 68`, `-46`, `28`, etc.) → extracted to
+      `BTN_SIZE`, `BTN_GAP`, `BTN_Y_OFFSET`, `HUD_HEIGHT` in the constants section
 
 ## Build & test
 
