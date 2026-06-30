@@ -15,7 +15,7 @@ derivative-based interior detection.
 
 The Chéritat document is the main reference for visualisation modes and rendering
 algorithms (Sections 3.1–3.6).  A condensed summary for implementing the various
-colouring modes is at `docs/cheritat-algorithms.md`.  The mathr.co.uk article was
+colouring modes is at `cheritat-algorithms.md`.  The mathr.co.uk article was
 used for cardioid/bulb bounding‑box optimisation.
 
 **Note on usefulness:** Much of the math (especially Sections 3.5–3.6 of Chéritat)
@@ -153,55 +153,55 @@ other three continue.
 Per the Chéritat document, the following visualization modes should be added.
 Each mode has a name, a short description, and a reference to the document section.
 
-### Mode 1: Potential coloring (Section 3.3)
+### Mode 1: Potential coloring ([Section 3.3](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#The_potential))
 - Use the potential `V(c) = log|z|/2^n` instead of iteration count for coloring
 - When `|z| > R` (R big, e.g., 1000), compute `V = log(|z|^2) / (2^n)`
 - Color based on `V` (not `n`)
 - Parameter: `R` (escape radius, default 1000.0)
 - Parameter: `color_function` (a transfer function mapping V → color)
 
-### Mode 2: Log-potential scale (Section 3.3.1)
+### Mode 2: Log-potential scale ([Section 3.3.1](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#Deep_zooms_and_log-potential_scale))
 - Extension of potential mode: color cycles on `log(V)` instead of V
 - Parameter: `K` (period constant, default `ln(2)`)
 - Parameter: `wave_function` (e.g., `0.5*(1+cos(2π*log(V)/K))`)
 - Useful for deep zooms where potential varies across many orders of magnitude
 
-### Mode 3: Boundary detection — Milnor's distance estimator (Section 3.5.1)
+### Mode 3: Boundary detection — Milnor's distance estimator ([Section 3.5.1](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#Milnor.27s))
 - Track derivative w.r.t. c: `der_c_{n+1} = 2*z_n*der_c_n + 1`
 - Compute distance estimate: `d_n = 2*|z_n|*log(|z_n|) / |der_c|`
 - Color boundary pixels black, outside pixels white (or colored)
 - Parameter: `R` (escape radius, default 1000.0)
 - Parameter: `thickness_factor` (boundary width, default 1.0)
 
-### Mode 4: Boundary detection — antialiased (Section 3.5.2)
+### Mode 4: Boundary detection — antialiased ([Section 3.5.2](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#Variation:_.28partial.29_antialias_effect_without_oversampling))
 - Like mode 3 but `d_n/s` interpolates between boundary and outside colors
 - Parameter: `thickness_factor` (default 1.414)
 
-### Mode 5: Distance estimator coloring (Section 3.5.3)
+### Mode 5: Distance estimator coloring ([Section 3.5.3](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#Variation:_using_the_distance_estimator_to_color_the_outside))
 - Color the outside as a function of the distance estimate `d_n`
 - Example: parity of `floor(log(d_n) / period)` for banded effect
 
-### Mode 6: Henriksen's boundary detection (Section 3.5.4)
+### Mode 6: Henriksen's boundary detection ([Section 3.5.4](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#Henriksen.27s))
 - Alternative to Milnor's, more versatile across zoom depths
 - Test `|z| < pixel_size * thickness_factor * |der|`
 - Parameter: `R` (escape radius, default 10.0)
 - Parameter: `thickness_factor` (default 0.25)
 - Note: can optionally set `dc = pixel_size * thickness_factor` upfront to save a multiply
 
-### Mode 7: Image trapping / fancy outside coloring (Section 3.6.1)
+### Mode 7: Image trapping / fancy outside coloring ([Section 3.6.1](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#Images))
 - Map the first escaped `z` value to a coordinate in a base image
 - Requires loading a "trap" image (PNG or similar)
 - Parameter: `trap_image_path`
 - Parameter: `R` (escape radius, default 4.8)
 
-### Mode 8: Normal map shading (Section 3.6.2)
+### Mode 8: Normal map shading ([Section 3.6.2](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#Normal_map_effect))
 - Compute a normal vector from the potential gradient: `u = z / der`
 - Apply Lambertian shading: `t = dot(normalize(u + (0,0,1)), light_dir)`
 - Parameter: `light_angle` (degrees, default 45)
 - Parameter: `height_factor` (default 1.5)
-- Can use distance estimator instead of potential (more complex, see 3.6.2.1)
+- Can use distance estimator instead of potential (more complex, see [3.6.2.1](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#Variation))
 
-### Mode 9: Radial strands / Stripe Average (Section 3.6.3)
+### Mode 9: Radial strands / Stripe Average ([Section 3.6.3](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set#Radial_strands))
 - Track the argument of `z` after each iteration near the escape
 - Requires averaging multiple values near the escape point
 - Reference: Kerry Mitchell's Stripe Average method

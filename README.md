@@ -188,12 +188,11 @@ You can then remove the `dependencies` section from `build.zig.zon`.
 ```
 mandelbrot/
 ├── README.md
-├── build.zig          # zig build script
-├── build.zig.zon      # package manifest
+├── build.zig              # zig build script
+├── build.zig.zon          # package manifest
+├── cheritat-algorithms.md # condensed algorithm reference
 └── src/
-    └── main.zig       # application source
-    └── docs/
-        └── cheritat-algorithms.md  # condensed algorithm reference
+    └── main.zig           # application source
 ```
 
 ---
