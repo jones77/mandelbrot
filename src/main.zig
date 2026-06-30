@@ -116,7 +116,38 @@ const RenderStrip = struct {
     timed_out: bool,
     /// |der|² threshold for interior detection, scaled with iteration depth.
     interior_eps_sq: f32,
+    /// Perturbation reference orbit (pre-computed at the view centre).
+    /// When `len > 0`, the inner loop uses δ_{n+1}=2·Z_n·δ_n+δ_n²+δ_c.
+    ref_orbit: []const RefOrbit,
 };
+
+/// A single entry in the perturbation reference orbit (f64 precision).
+const RefOrbit = struct { zx: f64, zy: f64, dx: f64, dy: f64 };
+
+/// Build the perturbation reference orbit at (cx, cy).  Returns the
+/// number of stable iterations (surprisingly small ref_escape means
+/// perturbation won't buy much — caller should fall back).
+fn computeReference(cx: f64, cy: f64, max_iters: u32, allocator: std.mem.Allocator) !struct { orbit: []RefOrbit } {
+    const orbit = try allocator.alloc(RefOrbit, max_iters);
+    var zx: f64 = cx;
+    var zy: f64 = cy;
+    var dx: f64 = 1.0;
+    var dy: f64 = 0.0;
+
+    for (0..max_iters) |i| {
+        orbit[i] = .{ .zx = zx, .zy = zy, .dx = dx, .dy = dy };
+        const zx2 = zx * zx;
+        const zy2 = zy * zy;
+        if (zx2 + zy2 > 4.0) break;
+        const ndx = 2.0 * (zx * dx - zy * dy) + 1.0;
+        const ndy = 2.0 * (zx * dy + zy * dx);
+        dx = ndx;
+        dy = ndy;
+        zy = 2.0 * zx * zy + cy;
+        zx = zx2 - zy2 + cx;
+    }
+    return .{ .orbit = orbit };
+}
 
 // ===========================================================================
 // Colour palette
@@ -218,75 +249,87 @@ fn renderStrip(ctx: *RenderStrip) void {
         while (px < w) : (px += 1) {
             const cx: f32 = @floatCast(ctx.left + @as(f64, @floatFromInt(px)) * ctx.range_x / @as(f64, @floatFromInt(w -| 1)));
 
-            // Periodicity check: skip iteration for points inside the main
-            // cardioid or period-2 bulb.  Skipped entirely when the view is
-            // far from these shapes (bounding box rejection).
+            // Periodicity check.
             if (!ctx.skip_periodicity) {
                 const q = (cx - 0.25) * (cx - 0.25) + cy2;
                 if (q * (q + (cx - 0.25)) <= 0.25 * cy2) continue;
                 if ((cx + 1.0) * (cx + 1.0) + cy2 <= 0.0625) continue;
             }
 
-            // Start from z=c (not z=0) so we can track the derivative
-            // (P^n)'(c).  For points inside M the derivative shrinks
-            // toward zero — we detect that early and stop iterating.
-            var z = Coord{ .re = cx, .im = cy };
-            var der = Coord{ .re = 1.0, .im = 0.0 };
-            var iter: u32 = 0;
-
-            // Periodicity orbit detection: store z at power-of-2
-            // iteration counts (1, 2, 4, 8, …).  If z ever returns to
-            // within ε of a stored value, the orbit is periodic → M.
-            var orbit_stored: [32]OrbitPoint = undefined;
-            var orbit_n: u32 = 0;
-
-            // Using the while-else expression: `break` provides the smooth
-            // iteration count on escape, `else` provides the limit when the
-            // point never escapes (inside the set → leave black).
-            const mu: f32 = while (iter < max_iters) : (iter += 1) {
-                // Derivative-based interior detection: (P^n)'(c) → 0.
-                if (der.normSq() < ctx.interior_eps_sq) {
-                    break @as(f32, @floatFromInt(max_iters));
-                }
-                if (z.normSq() > 4.0) {
-                    const log_mag = 0.5 * @log(z.normSq());
-                    break @as(f32, @floatFromInt(iter)) + 1.0 - @log(log_mag) / @log(2.0);
-                }
-                // Orbit periodicity detection: check if z matches a
-                // previous orbit point.
-                {
-                    var periodic = false;
-                    for (0..orbit_n) |j| {
-                        const dzx = z.re - orbit_stored[j].zx;
-                        const dzy = z.im - orbit_stored[j].zy;
-                        if (dzx * dzx + dzy * dzy < PERIODICITY_EPSILON_SQ) {
-                            periodic = true;
-                            break;
-                        }
-                    }
-                    if (periodic) break @as(f32, @floatFromInt(max_iters));
-                }
-                // Store z at power-of-2 iterations (1, 2, 4, 8, …).
-                if (iter + 1 == (@as(u32, 1) << @as(u5, @intCast(orbit_n)))) {
-                    orbit_stored[orbit_n] = .{ .zx = z.re, .zy = z.im };
-                    orbit_n += 1;
-                }
-                // Update derivative BEFORE z (order matters).
-                der = Coord{
-                    .re = 2.0 * (z.re * der.re - z.im * der.im),
-                    .im = 2.0 * (z.re * der.im + z.im * der.re),
-                };
-                // Update z: z = z² + c
-                z = Coord{
-                    .re = z.re * z.re - z.im * z.im + cx,
-                    .im = 2.0 * z.re * z.im + cy,
-                };
-            } else @as(f32, @floatFromInt(max_iters));
-
-            if (mu >= @as(f32, @floatFromInt(max_iters))) continue;
-
-            const color = smoothColor(@as(f64, mu), max_iters);
+            const max_f: f32 = @as(f32, @floatFromInt(max_iters));
             const pix_idx = (py * w + px) * 4;
+
+            const mu: f32 = if (ctx.ref_orbit.len > 0) blk: {
+                const dcx: f32 = @floatCast(cx - ctx.ref_orbit[0].zx);
+                const dcy: f32 = @floatCast(cy - ctx.ref_orbit[0].zy);
+                var dx: f32 = dcx;
+                var dy: f32 = dcy;
+                var iter: u32 = 0;
+                var orbit_stored: [32]OrbitPoint = undefined;
+                var orbit_n: u32 = 0;
+
+                break :blk while (iter < max_iters) : (iter += 1) {
+                    const ref = &ctx.ref_orbit[iter];
+                    if (ref.dx * ref.dx + ref.dy * ref.dy < ctx.interior_eps_sq) break :blk max_f;
+
+                    const Zx: f32 = @floatCast(ref.zx);
+                    const Zy: f32 = @floatCast(ref.zy);
+                    const sumx = Zx + dx;
+                    const sumy = Zy + dy;
+                    if (sumx * sumx + sumy * sumy > 4.0) {
+                        const log_mag = 0.5 * @log(@as(f64, sumx * sumx + sumy * sumy));
+                        const raw = @as(f64, @floatFromInt(iter)) + 1.0 - @log(log_mag) / @log(2.0);
+                        break :blk @floatCast(raw);
+                    }
+                    {
+                        var periodic = false;
+                        for (0..orbit_n) |j| {
+                            if ((dx - orbit_stored[j].zx) * (dx - orbit_stored[j].zx) + (dy - orbit_stored[j].zy) * (dy - orbit_stored[j].zy) < PERIODICITY_EPSILON_SQ) { periodic = true; break; }
+                        }
+                        if (periodic) break :blk max_f;
+                    }
+                    if (iter + 1 == (@as(u32, 1) << @as(u5, @intCast(orbit_n)))) {
+                        orbit_stored[orbit_n] = .{ .zx = dx, .zy = dy };
+                        orbit_n += 1;
+                    }
+                    const two_zd_re = 2.0 * (Zx * dx - Zy * dy);
+                    const two_zd_im = 2.0 * (Zx * dy + Zy * dx);
+                    const dsq_re = dx * dx - dy * dy;
+                    const dsq_im = 2.0 * dx * dy;
+                    dx = two_zd_re + dsq_re + dcx;
+                    dy = two_zd_im + dsq_im + dcy;
+                } else max_f;
+            } else blk: {
+                var z = Coord{ .re = cx, .im = cy };
+                var der = Coord{ .re = 1.0, .im = 0.0 };
+                var iter: u32 = 0;
+                var orbit_stored: [32]OrbitPoint = undefined;
+                var orbit_n: u32 = 0;
+
+                break :blk while (iter < max_iters) : (iter += 1) {
+                    if (der.normSq() < ctx.interior_eps_sq) break :blk max_f;
+                    if (z.normSq() > 4.0) {
+                        const raw = @as(f64, @floatFromInt(iter)) + 1.0 - @as(f64, @log(0.5 * @log(z.normSq())) / @log(2.0));
+                        break :blk @floatCast(raw);
+                    }
+                    {
+                        var periodic = false;
+                        for (0..orbit_n) |j| {
+                            if ((z.re - orbit_stored[j].zx) * (z.re - orbit_stored[j].zx) + (z.im - orbit_stored[j].zy) * (z.im - orbit_stored[j].zy) < PERIODICITY_EPSILON_SQ) { periodic = true; break; }
+                        }
+                        if (periodic) break :blk max_f;
+                    }
+                    if (iter + 1 == (@as(u32, 1) << @as(u5, @intCast(orbit_n)))) {
+                        orbit_stored[orbit_n] = .{ .zx = z.re, .zy = z.im };
+                        orbit_n += 1;
+                    }
+                    der = Coord{ .re = 2.0 * (z.re * der.re - z.im * der.im), .im = 2.0 * (z.re * der.im + z.im * der.re) };
+                    z = Coord{ .re = z.re * z.re - z.im * z.im + cx, .im = 2.0 * z.re * z.im + cy };
+                } else max_f;
+            };
+
+            if (mu >= max_f) continue;
+            const color = smoothColor(@as(f64, mu), max_iters);
             ctx.pixels[pix_idx + 0] = color.r;
             ctx.pixels[pix_idx + 1] = color.g;
             ctx.pixels[pix_idx + 2] = color.b;
@@ -354,14 +397,15 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState, clear: bool) !bool {
 
     const deadline_s = rl.getTime() + RENDER_TIMEOUT_S;
 
-    // Interior detection epsilon scales with iteration depth: at higher
-    // iteration counts the derivative shrinks more slowly, so we relax
-    // the threshold proportionally (the document notes that even
-    // |der| < 0.1 works to identify most interior points).
     const interior_eps_sq = INTERIOR_BASE_EPSILON_SQ *
         (@as(f32, @floatFromInt(view.max_iters)) / @as(f32, @floatFromInt(DEFAULT_MAX_ITERS)));
 
-    // Determine thread count: at most MAX_RENDER_THREADS, and at least MIN_ROWS_PER_THREAD each.
+    // Pre‑compute perturbation reference orbit at the view centre.
+    const ref = try computeReference(view.center_x, view.center_y, view.max_iters, std.heap.page_allocator);
+    defer std.heap.page_allocator.free(ref.orbit);
+    const ref_sliced = ref.orbit[0..view.max_iters];
+
+    // Determine thread count.
     var num_threads: usize = h / MIN_ROWS_PER_THREAD;
     if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
     if (num_threads < 1) num_threads = 1;
@@ -385,6 +429,7 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState, clear: bool) !bool {
             .deadline_s = deadline_s,
             .timed_out = false,
             .interior_eps_sq = interior_eps_sq,
+            .ref_orbit = ref_sliced,
         };
         threads[i] = try std.Thread.spawn(.{}, renderStrip, .{&strips[i]});
     }
