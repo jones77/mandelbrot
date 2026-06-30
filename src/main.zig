@@ -21,10 +21,10 @@ const INITIAL_CENTER_X: f64 = -0.5;
 const INITIAL_CENTER_Y: f64 = 0.0;
 const INITIAL_RANGE: f64 = 3.5;
 
-const DEFAULT_MAX_ITERS: u32 = 256;
+const DEFAULT_MAX_ITERS: u32 = 1024;
 const MIN_ITERS: u32 = 16;
 const MAX_ITERS_CAP: u32 = 65536; // 2^16
-const AUTO_SCALE_BASE: f64 = 80.0;
+const AUTO_SCALE_SLOPE: f64 = 0.25;
 const PALETTE_DENSITY: f64 = 4.0;
 const MAX_HISTORY: usize = 64;
 const MIN_SELECTION_PX: f64 = 8.0;
@@ -521,10 +521,13 @@ pub fn main() anyerror!void {
 
             // Auto-scale iterations: deeper zooms need more iterations
             // to resolve fine detail at the Mandelbrot boundary.
-            // Snaps to the next power of two (2^4 … 2^16).
+            // Uses a logarithmic scale: each ~4 zoom doublings (16x zoom)
+            // doubles the iteration count, starting from DEFAULT_MAX_ITERS.
             const zoom_factor = INITIAL_RANGE / view.range;
-            const raw_iters = zoom_factor * AUTO_SCALE_BASE;
-            const clamped = @min(raw_iters, @as(f64, @floatFromInt(MAX_ITERS_CAP)));
+            const log2_zf = @log(zoom_factor) / @log(2.0);
+            const log2_start = @log(@as(f64, @floatFromInt(DEFAULT_MAX_ITERS))) / @log(2.0);
+            const target_f = @exp2(log2_start + log2_zf * AUTO_SCALE_SLOPE);
+            const clamped = @min(target_f, @as(f64, @floatFromInt(MAX_ITERS_CAP)));
             const target_iters = nextPowerOf2(@as(u32, @intFromFloat(clamped)));
             if (target_iters > view.max_iters and target_iters <= MAX_ITERS_CAP) {
                 view.max_iters = target_iters;
@@ -550,7 +553,7 @@ pub fn main() anyerror!void {
                 history_ptr = history_len - 1;
             }
         }
- 
+
         // -- Left / Delete / Backspace -> undo zoom (instantly from cache) --
         if (rl.isKeyPressed(.delete) or rl.isKeyPressed(.backspace) or rl.isKeyPressed(.left)) {
             if (history_ptr > 0) {
