@@ -342,6 +342,7 @@ pub fn main() anyerror!void {
 
     var history: [MAX_HISTORY]HistoryEntry = undefined;
     var history_len: usize = 0;
+    var history_ptr: usize = 0;
 
     // ---- Window ----
     rl.initWindow(DEFAULT_WIDTH, DEFAULT_HEIGHT, "Mandelbrot Set");
@@ -369,6 +370,22 @@ pub fn main() anyerror!void {
     // ---- Initial render ----
     try renderMandelbrot(&image, view);
     rl.updateTexture(texture, image.data);
+
+    // Seed history with the initial view.
+    {
+        const px_w: usize = @intCast(screen_w);
+        const px_h: usize = @intCast(screen_h);
+        const px_size = px_w * px_h * 4;
+        history[0] = HistoryEntry{
+            .view = view,
+            .pixels = try std.heap.page_allocator.alloc(u8, px_size),
+            .w = px_w,
+            .h = px_h,
+        };
+        @memcpy(history[0].pixels, @as([*]u8, @ptrCast(image.data))[0..px_size]);
+        history_len = 1;
+        history_ptr = 0;
+    }
 
     // ---- Main loop ----
     while (!rl.windowShouldClose()) {
@@ -449,13 +466,18 @@ pub fn main() anyerror!void {
             const new_range = view.range * (size / @as(f64, @floatFromInt(smaller)));
 
             if (history_len < MAX_HISTORY) {
-                // Snapshot current pixel data so undo is instant.
+                // Truncate any "future" entries (left over after an undo).
+                while (history_ptr + 1 < history_len) {
+                    history_len -= 1;
+                    std.heap.page_allocator.free(history[history_len].pixels);
+                    history[history_len].pixels = &[_]u8{};
+                }
+                // Save the NEW view + its rendered pixels into the next slot.
                 const px_w: usize = @intCast(screen_w);
                 const px_h: usize = @intCast(screen_h);
                 const px_size = px_w * px_h * 4;
                 const pixels = try std.heap.page_allocator.alloc(u8, px_size);
-                const src = @as([*]u8, @ptrCast(image.data))[0..px_size];
-                @memcpy(pixels, src);
+                @memcpy(pixels, @as([*]u8, @ptrCast(image.data))[0..px_size]);
                 history[history_len] = HistoryEntry{
                     .view = view,
                     .pixels = pixels,
@@ -463,6 +485,7 @@ pub fn main() anyerror!void {
                     .h = px_h,
                 };
                 history_len += 1;
+                history_ptr = history_len - 1;
             }
 
             view.center_x = c_center.x;
@@ -482,26 +505,47 @@ pub fn main() anyerror!void {
             rl.updateTexture(texture, image.data);
         }
 
-        // -- Delete / Backspace -> undo zoom (instantly from cache) --
-        if (rl.isKeyPressed(.delete) or rl.isKeyPressed(.backspace)) {
-            if (history_len > 0) {
-                history_len -= 1;
-                const entry = &history[history_len];
+        // -- Left / Delete / Backspace -> undo zoom (instantly from cache) --
+        if (rl.isKeyPressed(.delete) or rl.isKeyPressed(.backspace) or rl.isKeyPressed(.left)) {
+            if (history_ptr > 0) {
+                history_ptr -= 1;
+                const entry = &history[history_ptr];
                 view = entry.view;
 
                 if (entry.w == @as(usize, @intCast(screen_w)) and
                     entry.h == @as(usize, @intCast(screen_h)))
                 {
-                    const dst = @as([*]u8, @ptrCast(image.data))[0 .. entry.w * entry.h * 4];
-                    @memcpy(dst, entry.pixels);
+                    @memcpy(
+                        @as([*]u8, @ptrCast(image.data))[0 .. entry.w * entry.h * 4],
+                        entry.pixels,
+                    );
                     rl.updateTexture(texture, image.data);
                 } else {
                     try renderMandelbrot(&image, view);
                     rl.updateTexture(texture, image.data);
                 }
+            }
+        }
 
-                std.heap.page_allocator.free(entry.pixels);
-                entry.pixels = &[_]u8{};
+        // -- Right -> redo zoom (instantly from cache) --
+        if (rl.isKeyPressed(.right)) {
+            if (history_ptr + 1 < history_len) {
+                history_ptr += 1;
+                const entry = &history[history_ptr];
+                view = entry.view;
+
+                if (entry.w == @as(usize, @intCast(screen_w)) and
+                    entry.h == @as(usize, @intCast(screen_h)))
+                {
+                    @memcpy(
+                        @as([*]u8, @ptrCast(image.data))[0 .. entry.w * entry.h * 4],
+                        entry.pixels,
+                    );
+                    rl.updateTexture(texture, image.data);
+                } else {
+                    try renderMandelbrot(&image, view);
+                    rl.updateTexture(texture, image.data);
+                }
             }
         }
 
@@ -525,13 +569,14 @@ pub fn main() anyerror!void {
             }
         }
 
-        // -- R -> reset --
+        // -- R -> reset (clean up all cached entries) --
         if (rl.isKeyPressed(.r)) {
             for (0..history_len) |i| {
                 if (history[i].pixels.len > 0)
                     std.heap.page_allocator.free(history[i].pixels);
             }
             history_len = 0;
+            history_ptr = 0;
             view.center_x = INITIAL_CENTER_X;
             view.center_y = INITIAL_CENTER_Y;
             view.range = INITIAL_RANGE;
@@ -585,7 +630,7 @@ pub fn main() anyerror!void {
         rl.drawRectangle(0, screen_h - 50, screen_w, 50, rl.Color.init(0, 0, 0, 160));
         rl.drawText(center_text, 10, screen_h - 42, 18, rl.Color.init(200, 200, 200, 255));
         rl.drawText(
-            "Drag: zoom (1:1)  |  Del: undo  |  R: reset  |  Wheel/+/-: x2",
+            "Drag: zoom (1:1)  |  <-: undo  ->: redo  |  R: reset  |  Wheel/+/-: x2",
             10,
             screen_h - 22,
             14,
