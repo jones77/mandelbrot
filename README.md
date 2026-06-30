@@ -4,18 +4,12 @@ An interactive Mandelbrot set explorer written in [Zig](https://ziglang.org/).
 
 ## Features
 
-- **Pan & zoom** — click and drag a **1:1 (square) selection box** to zoom into any
-  region. The selection is automatically constrained to a square so the aspect
-  ratio stays correct.
-- **Undo** — press **Delete** or **Backspace** to return to the previous zoom
-  level (up to 64 levels of history).
-- **Iteration control** — use the **mouse wheel** to increase or decrease the
-  escape-time iteration limit (more iterations = more detail near the set
-  boundary).
-- **Reset** — press **R** to jump back to the default overview.
-- **HUD** — the bottom bar shows the current complex-plane coordinates, visible
-  range, and iteration count.
-- **Cross-platform** — runs on macOS, Linux, and Windows 11.
+- **1:1 box zoom** — click and drag a square selection to zoom in
+- **Undo** — press Delete/Backspace to return to the previous zoom (up to 64 levels)
+- **Iteration control** — mouse wheel adjusts escape-time detail (32–4096)
+- **Reset** — press R to return to the default overview
+- **HUD** — shows current complex-plane coordinates, visible range, and iteration limit
+- **Cross-platform** — runs on macOS, Linux, and Windows 11 via raylib
 
 ---
 
@@ -26,25 +20,20 @@ An interactive Mandelbrot set explorer written in [Zig](https://ziglang.org/).
 | Platform | Zig 0.16 (stable) | Zig 0.17 (dev) |
 |----------|-------------------|----------------|
 | **macOS ARM** | [zig-aarch64-macos-0.16.0.tar.xz](https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz) | [zig-aarch64-macos-0.17.0-dev.1099+7db2ef610.tar.xz](https://ziglang.org/builds/zig-aarch64-macos-0.17.0-dev.1099+7db2ef610.tar.xz) |
-| **macOS x86** | See [ziglang.org/download](https://ziglang.org/download/) | See [ziglang.org/builds](https://ziglang.org/builds/) |
-| **Linux** | See [ziglang.org/download](https://ziglang.org/download/) | — |
-| **Windows** | See [ziglang.org/download](https://ziglang.org/download/) | — |
+| **macOS x86_64** | [zig-x86_64-macos-0.16.0.tar.xz](https://ziglang.org/download/0.16.0/zig-x86_64-macos-0.16.0.tar.xz) | [zig-x86_64-macos-0.17.0-dev.1099+7db2ef610.tar.xz](https://ziglang.org/builds/zig-x86_64-macos-0.17.0-dev.1099+7db2ef610.tar.xz) |
+| **Linux x86_64** | [zig-x86_64-linux-0.16.0.tar.xz](https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz) | — |
+| **Windows x86_64** | [zig-x86_64-windows-0.16.0.zip](https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip) | — |
 
-Extract the archive and add the `zig` binary to your `PATH`.
+Extract and add `zig` to your `PATH`.
 
 ### 2. Fetch the raylib dependency
 
-This project uses [raylib-zig](https://github.com/Not-Nik/raylib-zig) for
-windowing and graphics.  Run the following command **once** to download it
-and record the package hash:
-
 ```bash
-cd mandelbrot
-zig fetch --save https://github.com/Not-Nik/raylib-zig/archive/refs/tags/5.5-devel.tar.gz
+zig fetch --save git+https://github.com/raylib-zig/raylib-zig#v5.6-dev
 ```
 
-This adds raylib-zig to `build.zig.zon` with the correct hash.  You only
-need to do this once.
+This downloads raylib-zig (Zig bindings for raylib 6.0) and records the hash in
+`build.zig.zon`.  Only needed once.
 
 ### 3. Build and run
 
@@ -52,74 +41,61 @@ need to do this once.
 zig build run
 ```
 
-That's it!  A window will open showing the Mandelbrot set.
-
-> **Note:** On Linux you may need to install a few system libraries that raylib
-> depends on (X11, OpenGL, etc.).  See the [raylib wiki](https://github.com/raysan5/raylib/wiki/Working-on-GNU-Linux)
-> for details.
+> **Linux users** may need additional libraries (X11, OpenGL, ALSA).
+> See the [raylib wiki](https://github.com/raysan5/raylib/wiki/Working-on-GNU-Linux).
 
 ---
 
 ## Controls
 
-| Action | Input |
-|--------|-------|
-| **Zoom in** | Left-click and drag to draw a square selection, then release |
-| **Zoom out (undo)** | `Delete` or `Backspace` |
-| **Reset view** | `R` |
-| **More iterations** | Scroll wheel ↑ |
-| **Fewer iterations** | Scroll wheel ↓ |
-| **Close window** | `Esc` or window close button |
+| Action               | Input                           |
+|----------------------|---------------------------------|
+| Zoom in              | Left-drag a square, then release |
+| Undo zoom            | Delete or Backspace             |
+| Reset view           | R                               |
+| More detail          | Mouse wheel up                  |
+| Less detail          | Mouse wheel down                |
+| Close window         | Esc or window close button      |
 
-The selection box is always **1:1 (square)** — the longer side of your drag
-determines the square's size.  This keeps the aspect ratio correct for the
-complex plane.
+The selection box is always **1:1 (square)** — the longer side of the drag
+determines the size, so aspect ratio stays correct.
 
 ---
 
-## How it works (the maths)
+## How it works
 
-The **Mandelbrot set** is the set of complex numbers *c* for which the
-recurrence
+The **Mandelbrot set** is the set of complex numbers *c* where the iteration
+*zₙ₊₁ = zₙ² + c* (starting from *z₀ = 0*) remains bounded.
 
-```
-z₀ = 0
-zₙ₊₁ = zₙ² + c
-```
-
-remains **bounded** (does not escape to infinity).
-
-- If after some number of iterations |zₙ| > 2, the point is **outside** the set.
-- If the iteration limit is reached without escaping, the point is **inside**
-  the set (coloured black).
-- The colour of exterior points is determined by **how quickly** they escaped
-  (the iteration count), giving the familiar psychedelic bands.
+- Points where |zₙ| > 2 after *n* iterations are **outside** the set.
+- Points that never escape (up to the iteration limit) are **inside** (black).
+- The colour of exterior points reflects *how fast* they escape.
 
 ### Further reading
 
 - [Mandelbrot set – Wikipedia](https://en.wikipedia.org/wiki/Mandelbrot_set)
-- [The Mandelbrot Set – Numberphile (YouTube)](https://www.youtube.com/watch?v=NGMRB4O922I)
-- [Mandelbrot Set Explained (interactive)](https://www.maths.tcd.ie/~dwilkins/mandelbrot/index.html)
-- [Smooth iteration count coloring](https://en.wikipedia.org/wiki/Plotting_algorithms_for_the_Mandelbrot_set#Continuous_(smooth)_coloring)
+- [The Mandelbrot Set – Numberphile](https://www.youtube.com/watch?v=NGMRB4O922I)
+- [Plotting algorithms – smooth coloring](https://en.wikipedia.org/wiki/Plotting_algorithms_for_the_Mandelbrot_set#Continuous_(smooth)_coloring)
 
 ---
 
-## Project structure
+## Zig 0.16 vs 0.17 differences relevant to this project
 
-```
-mandelbrot/
-├── README.md          <- you are here
-├── build.zig          <- Zig build script
-├── build.zig.zon      <- package manifest (dependencies)
-└── src/
-    └── main.zig       <- application source code
-```
+Zig 0.17 is a development branch not yet released.  **raylib-zig targets
+Zig 0.16.x** (its `build.zig.zon` declares `minimum_zig_version = "0.16.0"`).
+If you use Zig 0.17 you may encounter build-system API changes:
+
+- The `b.dependency()` / `root_module.addImport()` / `linkLibrary()` API
+  used in this project is stable across both versions.
+- If a deprecation or missing function arises, consult `zig build --help`
+  and the [Zig 0.17 release notes](https://ziglang.org/download/0.17.0/release-notes.html)
+  (once published).
 
 ---
 
-## Alternative: using system raylib
+## Alternative: using a system-installed raylib
 
-If you already have raylib installed via your package manager:
+If you have raylib installed system-wide:
 
 ```bash
 # macOS
@@ -130,36 +106,46 @@ sudo apt install libraylib-dev
 
 # Fedora
 sudo dnf install raylib-devel
+
+# Windows (vcpkg)
+vcpkg install raylib
 ```
 
-Then edit `build.zig` — comment out **Option A** and uncomment **Option B**:
+Then edit `build.zig` to replace the `raylib_zig` dependency block with:
 
 ```zig
-// ---- Option B: Link against a system-installed raylib ----
 exe.linkSystemLibrary("raylib");
 exe.linkLibC();
 ```
 
-You can then remove (or comment out) the `dependencies` section in
-`build.zig.zon` and build with:
+You can then remove the `dependencies` section from `build.zig.zon`.
 
-```bash
-zig build run
+---
+
+## Project structure
+
+```
+mandelbrot/
+├── README.md
+├── build.zig          # zig build script
+├── build.zig.zon      # package manifest
+└── src/
+    └── main.zig       # application source
 ```
 
 ---
 
 ## Zig learning resources
 
-- **[ziglang.org/learn](https://ziglang.org/learn/)** — official getting-started guide
-- **[Zig Language Reference](https://ziglang.org/documentation/master/)** — the canonical language reference
-- **[zig.guide](https://zig.guide/)** — community-written intro
-- **[ziglings](https://codeberg.org/ziglings/exercises)** — interactive exercises to learn Zig
-- **[Zig SHOWTIME](https://zig.show/)** — community projects and inspiration
-- **[Zig Discord / IRC](https://ziglang.org/community/)** — friendly community
+- [ziglang.org/learn](https://ziglang.org/learn/) — official guide
+- [Zig Language Reference](https://ziglang.org/documentation/master/)
+- [zig.guide](https://zig.guide/) — community intro
+- [ziglings](https://codeberg.org/ziglings/exercises) — interactive exercises
+- [Zig Showtime](https://zig.show/) — community projects
+- [Zig community](https://ziglang.org/community/) — Discord / IRC / forums
 
 ---
 
 ## License
 
-MIT — do whatever you want with this code.
+MIT

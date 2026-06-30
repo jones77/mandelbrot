@@ -1,10 +1,5 @@
 const std = @import("std");
 
-/// Builds the Mandelbrot visualiser.
-///
-/// This script expects `raylib-zig` to be available as a Zig package
-/// dependency (declared in build.zig.zon).  If you prefer to link
-/// against a system-installed raylib, see the commented-out section.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -16,30 +11,26 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // ---- Option A: Use raylib-zig from the package manager ----
-    const raylib_dep = b.dependency("raylib-zig", .{
+    // Use raylib-zig from the Zig package manager.
+    // Run `zig fetch --save` first to add the dependency to build.zig.zon.
+    const raylib_dep = b.dependency("raylib_zig", .{
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("raylib", raylib_dep.module("raylib"));
-    exe.linkLibrary(raylib_dep.artifact("raylib"));
 
-    // ---- Option B: Link against a system-installed raylib ----
-    // (Uncomment this block and comment out Option A if you have
-    //  raylib installed via brew / apt / manual build.)
-    //
-    // exe.linkSystemLibrary("raylib");
-    // exe.linkLibC();
-    // exe.addIncludePath(.{ .cwd_relative = "/usr/local/include" });
+    const raylib_module = raylib_dep.module("raylib");
+    const raylib_artifact = raylib_dep.artifact("raylib");
 
-    // ---- Install & run steps ----
+    exe.root_module.addImport("raylib", raylib_module);
+    exe.root_module.linkLibrary(raylib_artifact);
+
+    // ---- Install & run ----
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    if (b.args) |args| run_cmd.addArgs(args);
+
     const run_step = b.step("run", "Run the Mandelbrot visualizer");
     run_step.dependOn(&run_cmd.step);
 }

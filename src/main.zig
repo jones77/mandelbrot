@@ -6,8 +6,6 @@
 //! - Press Delete / Backspace to return to the previous zoom level.
 //! - Use mouse wheel to adjust iteration count (more detail near edges).
 //! - Press R to reset the view.
-//!
-//! Requires raylib (via raylib-zig package or system library).
 
 const std = @import("std");
 const rl = @import("raylib");
@@ -28,26 +26,6 @@ const MAX_HISTORY: usize = 64;
 const MIN_SELECTION_PX: f64 = 8.0;
 const TARGET_FPS: i32 = 60;
 const PALETTE_SIZE: usize = 1024;
-
-// ===========================================================================
-// Types
-// ===========================================================================
-
-const ViewState = struct {
-    center_x: f64,
-    center_y: f64,
-    range: f64,
-    max_iters: u32,
-};
-
-const DragState = struct {
-    start_x: f64,
-    start_y: f64,
-    /// Constrained to maintain a square selection (same centre, longer side).
-    current_x: f64,
-    current_y: f64,
-    active: bool,
-};
 
 // ===========================================================================
 // Colour palette
@@ -94,18 +72,16 @@ fn hslToRgb(h: f32, s: f32, l: f32) rl.Color {
         b1 = x;
     }
 
-    return rl.Color{
-        .r = @intFromFloat(@round((r1 + m) * 255.0)),
-        .g = @intFromFloat(@round((g1 + m) * 255.0)),
-        .b = @intFromFloat(@round((b1 + m) * 255.0)),
-        .a = 255,
-    };
+    return rl.Color.init(
+        @intFromFloat(@round((r1 + m) * 255.0)),
+        @intFromFloat(@round((g1 + m) * 255.0)),
+        @intFromFloat(@round((b1 + m) * 255.0)),
+        255,
+    );
 }
 
 fn iterationColor(iter: u32, max_iters: u32) rl.Color {
-    if (iter == max_iters) {
-        return rl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
-    }
+    if (iter == max_iters) return .black;
     const idx = iter % @as(u32, @intCast(PALETTE_SIZE));
     return palette[idx];
 }
@@ -114,7 +90,7 @@ fn iterationColor(iter: u32, max_iters: u32) rl.Color {
 // Mandelbrot computation
 // ===========================================================================
 
-fn renderMandelbrot(image: *rl.Image, view: ViewState) void {
+fn renderMandelbrot(image: *rl.Image, view: anytype) void {
     const w: usize = @intCast(image.width);
     const h: usize = @intCast(image.height);
 
@@ -124,7 +100,7 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) void {
     const left = view.center_x - range_x / 2.0;
     const top = view.center_y - range_y / 2.0;
 
-    const pixels = @as([*]u8, @ptrCast(image.data.?))[0 .. w * h * 4];
+    const pixels = @as([*]u8, @ptrCast(image.data))[0 .. w * h * 4];
 
     var py: usize = 0;
     while (py < h) : (py += 1) {
@@ -163,7 +139,7 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) void {
 fn screenToComplex(
     sx: f64,
     sy: f64,
-    view: ViewState,
+    view: anytype,
     img_w: i32,
     img_h: i32,
 ) struct { x: f64, y: f64 } {
@@ -183,23 +159,17 @@ fn screenToComplex(
 // Helpers
 // ===========================================================================
 
-/// Returns -1.0, 0.0, or 1.0 for the given float.
 fn signf(x: f64) f64 {
     if (x > 0) return 1.0;
     if (x < 0) return -1.0;
     return 0.0;
 }
 
-/// Constrain a drag so it always forms a square.  The square has the
-/// same starting corner as the original drag but uses the longer axis
-/// for both width and height.
 fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64) struct { x: f64, y: f64 } {
     const raw_dx = raw_mx - start_x;
     const raw_dy = raw_my - start_y;
     const size = @max(@abs(raw_dx), @abs(raw_dy));
-    if (size < 1.0) {
-        return .{ .x = start_x, .y = start_y };
-    }
+    if (size < 1.0) return .{ .x = start_x, .y = start_y };
     return .{
         .x = start_x + signf(raw_dx) * size,
         .y = start_y + signf(raw_dy) * size,
@@ -210,35 +180,46 @@ fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64) str
 // Main
 // ===========================================================================
 
-pub fn main() !void {
+pub fn main() anyerror!void {
     buildPalette();
 
-    var view = ViewState{
+    var view = struct {
+        center_x: f64,
+        center_y: f64,
+        range: f64,
+        max_iters: u32,
+    }{
         .center_x = INITIAL_CENTER_X,
         .center_y = INITIAL_CENTER_Y,
         .range = INITIAL_RANGE,
         .max_iters = DEFAULT_MAX_ITERS,
     };
 
-    var history: [MAX_HISTORY]ViewState = undefined;
+    var history: [MAX_HISTORY]@TypeOf(view) = undefined;
     var history_len: usize = 0;
 
     // ---- Window ----
-    rl.InitWindow(DEFAULT_WIDTH, DEFAULT_HEIGHT, "Mandelbrot Set");
-    defer rl.CloseWindow();
-    rl.SetTargetFPS(TARGET_FPS);
+    rl.initWindow(DEFAULT_WIDTH, DEFAULT_HEIGHT, "Mandelbrot Set");
+    defer rl.closeWindow();
+    rl.setTargetFPS(TARGET_FPS);
 
     // ---- Image & texture ----
-    var screen_w: i32 = rl.GetScreenWidth();
-    var screen_h: i32 = rl.GetScreenHeight();
+    var screen_w: i32 = rl.getScreenWidth();
+    var screen_h: i32 = rl.getScreenHeight();
 
-    var image = rl.GenImageColor(screen_w, screen_h, rl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 });
-    defer rl.UnloadImage(image);
+    var image = rl.genImageColor(screen_w, screen_h, .black);
+    defer rl.unloadImage(image);
 
-    var texture = rl.LoadTextureFromImage(image);
-    defer rl.UnloadTexture(texture);
+    var texture = rl.loadTextureFromImage(image);
+    defer rl.unloadTexture(texture);
 
-    var drag = DragState{
+    var drag = struct {
+        start_x: f64,
+        start_y: f64,
+        current_x: f64,
+        current_y: f64,
+        active: bool,
+    }{
         .start_x = 0,
         .start_y = 0,
         .current_x = 0,
@@ -248,25 +229,25 @@ pub fn main() !void {
 
     // ---- Initial render ----
     renderMandelbrot(&image, view);
-    rl.UpdateTexture(texture, image.data);
+    rl.updateTexture(texture, image.data);
 
     // ---- Main loop ----
-    while (!rl.WindowShouldClose()) {
+    while (!rl.windowShouldClose()) {
         // ---- Handle window resize ----
-        const new_w = rl.GetScreenWidth();
-        const new_h = rl.GetScreenHeight();
+        const new_w = rl.getScreenWidth();
+        const new_h = rl.getScreenHeight();
         if (new_w != screen_w or new_h != screen_h) {
             screen_w = new_w;
             screen_h = new_h;
 
-            rl.UnloadTexture(texture);
-            rl.UnloadImage(image);
+            rl.unloadTexture(texture);
+            rl.unloadImage(image);
 
-            image = rl.GenImageColor(screen_w, screen_h, rl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 });
-            texture = rl.LoadTextureFromImage(image);
+            image = rl.genImageColor(screen_w, screen_h, .black);
+            texture = rl.loadTextureFromImage(image);
 
             renderMandelbrot(&image, view);
-            rl.UpdateTexture(texture, image.data);
+            rl.updateTexture(texture, image.data);
         }
 
         // ============================================================
@@ -274,38 +255,36 @@ pub fn main() !void {
         // ============================================================
 
         // -- Start drag --
-        if (rl.IsMouseButtonPressed(rl.MOUSE_BUTTON_LEFT)) {
-            drag.start_x = @floatFromInt(rl.GetMouseX());
-            drag.start_y = @floatFromInt(rl.GetMouseY());
+        if (rl.isMouseButtonPressed(.left)) {
+            drag.start_x = @floatFromInt(rl.getMouseX());
+            drag.start_y = @floatFromInt(rl.getMouseY());
             drag.current_x = drag.start_x;
             drag.current_y = drag.start_y;
             drag.active = true;
         }
 
         // -- Update drag (constrain to square in real time) --
-        if (drag.active and rl.IsMouseButtonDown(rl.MOUSE_BUTTON_LEFT)) {
-            const raw_mx: f64 = @floatFromInt(rl.GetMouseX());
-            const raw_my: f64 = @floatFromInt(rl.GetMouseY());
+        if (drag.active and rl.isMouseButtonDown(.left)) {
+            const raw_mx: f64 = @floatFromInt(rl.getMouseX());
+            const raw_my: f64 = @floatFromInt(rl.getMouseY());
             const sq = constrainDragSquare(drag.start_x, drag.start_y, raw_mx, raw_my);
             drag.current_x = sq.x;
             drag.current_y = sq.y;
         }
 
         // -- End drag -> zoom in --
-        if (drag.active and rl.IsMouseButtonReleased(rl.MOUSE_BUTTON_LEFT)) {
+        if (drag.active and rl.isMouseButtonReleased(.left)) {
             defer drag.active = false;
 
             const size = @abs(drag.current_x - drag.start_x);
             if (size < MIN_SELECTION_PX) continue;
 
-            // Centre of the selection square in screen space.
             const sel_cx = (drag.start_x + drag.current_x) / 2.0;
             const sel_cy = (drag.start_y + drag.current_y) / 2.0;
 
             const c_center = screenToComplex(sel_cx, sel_cy, view, screen_w, screen_h);
             const new_range = view.range * (size / @as(f64, @floatFromInt(screen_w)));
 
-            // Save current view to history.
             if (history_len < MAX_HISTORY) {
                 history[history_len] = view;
                 history_len += 1;
@@ -316,73 +295,69 @@ pub fn main() !void {
             view.range = new_range;
 
             renderMandelbrot(&image, view);
-            rl.UpdateTexture(texture, image.data);
+            rl.updateTexture(texture, image.data);
         }
 
         // -- Delete / Backspace -> undo zoom --
-        if (rl.IsKeyPressed(rl.KEY_DELETE) or rl.IsKeyPressed(rl.KEY_BACKSPACE)) {
+        if (rl.isKeyPressed(.delete) or rl.isKeyPressed(.backspace)) {
             if (history_len > 0) {
                 history_len -= 1;
                 view = history[history_len];
                 renderMandelbrot(&image, view);
-                rl.UpdateTexture(texture, image.data);
+                rl.updateTexture(texture, image.data);
             }
         }
 
         // -- Scroll wheel -> adjust max iterations --
-        const wheel = rl.GetMouseWheelMove();
+        const wheel = rl.getMouseWheelMove();
         if (wheel != 0) {
             const delta: i32 = if (wheel > 0) @as(i32, 32) else -32;
             const new_iters: i32 = @as(i32, @intCast(view.max_iters)) + delta;
             view.max_iters = @intCast(@max(32, @min(4096, new_iters)));
             renderMandelbrot(&image, view);
-            rl.UpdateTexture(texture, image.data);
+            rl.updateTexture(texture, image.data);
         }
 
         // -- R -> reset --
-        if (rl.IsKeyPressed(rl.KEY_R)) {
-            view = ViewState{
-                .center_x = INITIAL_CENTER_X,
-                .center_y = INITIAL_CENTER_Y,
-                .range = INITIAL_RANGE,
-                .max_iters = view.max_iters,
-            };
+        if (rl.isKeyPressed(.r)) {
+            view.center_x = INITIAL_CENTER_X;
+            view.center_y = INITIAL_CENTER_Y;
+            view.range = INITIAL_RANGE;
             history_len = 0;
             renderMandelbrot(&image, view);
-            rl.UpdateTexture(texture, image.data);
+            rl.updateTexture(texture, image.data);
         }
 
         // ============================================================
         // Drawing
         // ============================================================
-        rl.BeginDrawing();
-        defer rl.EndDrawing();
+        rl.beginDrawing();
+        defer rl.endDrawing();
 
-        rl.ClearBackground(rl.Color{ .r = 20, .g = 20, .b = 30, .a = 255 });
+        rl.clearBackground(rl.Color.init(20, 20, 30, 255));
 
-        // Draw the Mandelbrot texture.
-        rl.DrawTexture(texture, 0, 0, rl.Color{ .r = 255, .g = 255, .b = 255, .a = 255 });
+        rl.drawTexture(texture, 0, 0, .white);
 
-        // Draw the selection rectangle (always square because we constrain it).
+        // Draw the selection rectangle (always square).
         if (drag.active) {
             const x0: f32 = @floatCast(@min(drag.start_x, drag.current_x));
             const y0: f32 = @floatCast(@min(drag.start_y, drag.current_y));
             const sz: f32 = @floatCast(@abs(drag.current_x - drag.start_x));
 
             if (sz >= MIN_SELECTION_PX) {
-                rl.DrawRectangle(
+                rl.drawRectangle(
                     @intFromFloat(x0),
                     @intFromFloat(y0),
                     @intFromFloat(sz),
                     @intFromFloat(sz),
-                    rl.Color{ .r = 0, .g = 255, .b = 0, .a = 40 },
+                    rl.Color.init(0, 255, 0, 40),
                 );
-                rl.DrawRectangleLines(
+                rl.drawRectangleLines(
                     @intFromFloat(x0),
                     @intFromFloat(y0),
                     @intFromFloat(sz),
                     @intFromFloat(sz),
-                    rl.Color{ .r = 0, .g = 255, .b = 0, .a = 180 },
+                    rl.Color.init(0, 255, 0, 180),
                 );
             }
         }
@@ -395,10 +370,14 @@ pub fn main() !void {
             .{ view.center_x, view.center_y, view.range, view.max_iters },
         ) catch unreachable;
 
-        const help_text = "Left-drag: zoom (1:1)  |  Del/Backspace: undo  |  R: reset  |  Wheel: +-iters";
-
-        rl.DrawRectangle(0, screen_h - 50, screen_w, 50, rl.Color{ .r = 0, .g = 0, .b = 0, .a = 160 });
-        rl.DrawText(center_text.ptr, 10, screen_h - 42, 18, rl.Color{ .r = 200, .g = 200, .b = 200, .a = 255 });
-        rl.DrawText(help_text, 10, screen_h - 22, 14, rl.Color{ .r = 150, .g = 150, .b = 150, .a = 255 });
+        rl.drawRectangle(0, screen_h - 50, screen_w, 50, rl.Color.init(0, 0, 0, 160));
+        rl.drawText(center_text, 10, screen_h - 42, 18, rl.Color.init(200, 200, 200, 255));
+        rl.drawText(
+            "Left-drag: zoom (1:1)  |  Del/Backspace: undo  |  R: reset  |  Wheel: +-iters",
+            10,
+            screen_h - 22,
+            14,
+            rl.Color.init(150, 150, 150, 255),
+        );
     }
 }
