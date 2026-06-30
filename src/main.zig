@@ -34,7 +34,8 @@ const PALETTE_SIZE: usize = 1024;
 const MAX_RENDER_THREADS: usize = 8;
 const RENDER_TIMEOUT_S: f64 = 30.0;
 const CARDIOID_Y_MAX: f64 = 3.0 * @sqrt(3.0) / 8.0;
-const INTERIOR_EPSILON_SQ: f64 = 1e-6; // derivative ≈ 0 → inside M
+const INTERIOR_EPSILON_SQ: f32 = 1e-6; // derivative ≈ 0 → inside M
+const PERIODICITY_EPSILON_SQ: f32 = 1e-8; // |z_{n+k} - z_n|² → orbit periodic
 
 // ===========================================================================
 // Types
@@ -178,12 +179,12 @@ fn renderStrip(ctx: *RenderStrip) void {
             return;
         }
 
-        const cy = ctx.top + @as(f64, @floatFromInt(py)) * ctx.range_y / @as(f64, @floatFromInt(h -| 1));
+        const cy: f32 = @floatCast(ctx.top + @as(f64, @floatFromInt(py)) * ctx.range_y / @as(f64, @floatFromInt(h -| 1)));
         const cy2 = cy * cy;
 
         var px: usize = 0;
         while (px < w) : (px += 1) {
-            const cx = ctx.left + @as(f64, @floatFromInt(px)) * ctx.range_x / @as(f64, @floatFromInt(w -| 1));
+            const cx: f32 = @floatCast(ctx.left + @as(f64, @floatFromInt(px)) * ctx.range_x / @as(f64, @floatFromInt(w -| 1)));
 
             // Periodicity check: skip iteration for points inside the main
             // cardioid or period-2 bulb.  Skipped entirely when the view is
@@ -197,25 +198,52 @@ fn renderStrip(ctx: *RenderStrip) void {
             // Start from z=c (not z=0) so we can track the derivative
             // (P^n)'(c).  For points inside M the derivative shrinks
             // toward zero — we detect that early and stop iterating.
-            var zx: f64 = cx;
-            var zy: f64 = cy;
-            var dx: f64 = 1.0;
-            var dy: f64 = 0.0;
+            var zx: f32 = cx;
+            var zy: f32 = cy;
+            var dx: f32 = 1.0;
+            var dy: f32 = 0.0;
             var iter: u32 = 0;
+
+            // Periodicity orbit detection: store z at power-of-2
+            // iteration counts (1, 2, 4, 8, …).  If z ever returns to
+            // within ε of a stored value, the orbit is periodic → M.
+            var orbit_zx: [32]f32 = undefined;
+            var orbit_zy: [32]f32 = undefined;
+            var orbit_n: u32 = 0;
 
             // Using the while-else expression: `break` provides the smooth
             // iteration count on escape, `else` provides the limit when the
             // point never escapes (inside the set → leave black).
-            const mu = while (iter < max_iters) : (iter += 1) {
+            const mu: f32 = while (iter < max_iters) : (iter += 1) {
                 // Derivative-based interior detection: (P^n)'(c) → 0.
                 if (dx * dx + dy * dy < INTERIOR_EPSILON_SQ) {
-                    break @as(f64, @floatFromInt(max_iters));
+                    break @as(f32, @floatFromInt(max_iters));
                 }
                 const zx2 = zx * zx;
                 const zy2 = zy * zy;
                 if (zx2 + zy2 > 4.0) {
                     const log_mag = 0.5 * @log(zx2 + zy2);
-                    break @as(f64, @floatFromInt(iter)) + 1.0 - @log(log_mag) / @log(2.0);
+                    break @as(f32, @floatFromInt(iter)) + 1.0 - @log(log_mag) / @log(2.0);
+                }
+                // Orbit periodicity detection: check if z matches a
+                // previous orbit point.
+                {
+                    var periodic = false;
+                    for (0..orbit_n) |j| {
+                        const dzx = zx - orbit_zx[j];
+                        const dzy = zy - orbit_zy[j];
+                        if (dzx * dzx + dzy * dzy < PERIODICITY_EPSILON_SQ) {
+                            periodic = true;
+                            break;
+                        }
+                    }
+                    if (periodic) break @as(f32, @floatFromInt(max_iters));
+                }
+                // Store z at power-of-2 iterations (1, 2, 4, 8, …).
+                if (iter + 1 == (@as(u32, 1) << @as(u5, @intCast(orbit_n)))) {
+                    orbit_zx[orbit_n] = zx;
+                    orbit_zy[orbit_n] = zy;
+                    orbit_n += 1;
                 }
                 // Update derivative BEFORE z (order matters).
                 const ndx = 2.0 * (zx * dx - zy * dy);
@@ -225,11 +253,11 @@ fn renderStrip(ctx: *RenderStrip) void {
                 // Update z.
                 zy = 2.0 * zx * zy + cy;
                 zx = zx2 - zy2 + cx;
-            } else @as(f64, @floatFromInt(max_iters));
+            } else @as(f32, @floatFromInt(max_iters));
 
-            if (mu >= @as(f64, @floatFromInt(max_iters))) continue;
+            if (mu >= @as(f32, @floatFromInt(max_iters))) continue;
 
-            const color = smoothColor(mu, max_iters);
+            const color = smoothColor(@as(f64, mu), max_iters);
             const pix_idx = (py * w + px) * 4;
             ctx.pixels[pix_idx + 0] = color.r;
             ctx.pixels[pix_idx + 1] = color.g;
