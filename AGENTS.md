@@ -14,9 +14,9 @@ derivative-based interior detection.
 [Cardioid and bulb checking – Claude Heiland-Allen (mathr.co.uk)](https://mathr.co.uk/blog/2022-11-19_cardioid_and_bulb_checking.html)
 
 The Chéritat document is the main reference for visualisation modes and rendering
-algorithms (Sections 3.1–3.6).  The mathr.co.uk article was used for cardioid/bulb
-bounding‑box optimisation.  Perturbation theory (not yet implemented) is described
-in K. I. Martin's "Perturbation theory for the Mandelbrot set" (2013).
+algorithms (Sections 3.1–3.6).  A condensed summary for implementing the various
+colouring modes is at `docs/cheritat-algorithms.md`.  The mathr.co.uk article was
+used for cardioid/bulb bounding‑box optimisation.
 
 **Note on usefulness:** Much of the math (especially Sections 3.5–3.6 of Chéritat)
 is visual enhancement, not raw speed.  The biggest speed wins — derivative-based

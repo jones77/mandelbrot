@@ -192,6 +192,8 @@ mandelbrot/
 ├── build.zig.zon      # package manifest
 └── src/
     └── main.zig       # application source
+    └── docs/
+        └── cheritat-algorithms.md  # condensed algorithm reference
 ```
 
 ---
