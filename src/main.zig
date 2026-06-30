@@ -185,6 +185,10 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState) !void {
 
     const pixels = @as([*]u8, @ptrCast(image.data))[0 .. w * h * 4];
 
+    // Clear to black so old pixels from a previous zoom don't persist
+    // in areas that are now "inside set" (black → left unwritten).
+    @memset(pixels, 0);
+
     // Determine thread count: at most MAX_RENDER_THREADS, and at least 32 rows each.
     var num_threads: usize = h / 32;
     if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
