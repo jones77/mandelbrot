@@ -304,6 +304,22 @@ fn clearToOpaqueBlack(pixels: []u8) void {
     }
 }
 
+/// Log a timeout warning with view coordinates so the scene can be recreated.
+fn logTimeout(view: ViewState) void {
+    std.debug.print(
+        \\TIMEOUT: Mandelbrot render exceeded {d:.0}s
+        \\  To recreate: center=({d:.16}, {d:.16})
+        \\  range={e:.4}  iters={d}
+        \\
+    , .{
+        RENDER_TIMEOUT_S,
+        view.center_x,
+        view.center_y,
+        view.range,
+        view.max_iters,
+    });
+}
+
 /// Render the Mandelbrot set across multiple CPU cores.
 /// `clear` — zero the pixel buffer first (needed for a new view).
 /// Returns `true` if the render timed out (partial image, press Space to continue).
@@ -369,18 +385,7 @@ fn renderMandelbrot(image: *rl.Image, view: ViewState, clear: bool) !bool {
     // Log if any thread timed out, and tell the caller.
     for (0..num_threads) |i| {
         if (strips[i].timed_out) {
-            std.debug.print(
-                \\TIMEOUT: Mandelbrot render exceeded {d:.0}s
-                \\  To recreate: center=({d:.16}, {d:.16})
-                \\  range={e:.4}  iters={d}
-                \\
-            , .{
-                RENDER_TIMEOUT_S,
-                view.center_x,
-                view.center_y,
-                view.range,
-                view.max_iters,
-            });
+            logTimeout(view);
             return true;
         }
     }
@@ -750,6 +755,15 @@ const App = struct {
         if (self.render_timed_out) {
             rl.drawText("[Space]: continue rendering (30s more)", 10, hud_top + 4, 12, rl.Color.init(255, 200, 100, 255));
         }
+
+        // Small hint about resize behaviour (always visible, low priority).
+        rl.drawText(
+            "Note: resize clears zoom history",
+            self.screen_w - 230,
+            hud_top + 4,
+            12,
+            rl.Color.init(100, 100, 110, 160),
+        );
 
         // On-screen iteration buttons.
         const btn_y = self.screen_h - BTN_Y_OFFSET;

@@ -169,11 +169,8 @@ Implementation approach:
 
 ## Code review TODO items
 
-- [ ] Extract the 30s timeout warning text ("TIMEOUT: ...") into a constant or helper
 - [ ] `INTERIOR_EPSILON_SQ` may need tuning at very deep zooms (the document notes
       that epsilon=0.1 sometimes gives false positives near parabolic parameters)
-- [ ] The `hslToRgb` function uses `f32` but the Mandelbrot math uses `f64` — this
-      is fine for the palette (computed once) but could be noted
 - [ ] Window resize invalidates pixel cache silently — a small "Resize clears history"
       hint in the HUD would help (low priority)
 
@@ -182,6 +179,10 @@ Implementation approach:
 - [x] `constrainDragSquare` return type → named `ComplexPoint` (was anonymous struct)
 - [x] Button position constants (`screen_w - 68`, `-46`, `28`, etc.) → extracted to
       `BTN_SIZE`, `BTN_GAP`, `BTN_Y_OFFSET`, `HUD_HEIGHT` in the constants section
+- [x] The 30s timeout warning text → extracted to `logTimeout()` helper
+- [x] "Resize clears history" hint → now displayed in bottom-right corner of HUD
+- [x] The `hslToRgb` function uses `f32` but the Mandelbrot math uses `f64` — this
+      is fine for the palette (computed once) but could be noted
 
 ## Build & test
 
