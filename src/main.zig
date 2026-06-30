@@ -23,7 +23,7 @@ const INITIAL_RANGE: f64 = 3.5;
 
 const DEFAULT_MAX_ITERS: u32 = 256;
 const MIN_ITERS: u32 = 16;
-const MAX_ITERS_CAP: u32 = 2147483648; // 2^31 (2^32 overflows u32)
+const MAX_ITERS_CAP: u32 = 65536; // 2^16
 const AUTO_SCALE_BASE: f64 = 80.0;
 const PALETTE_DENSITY: f64 = 4.0;
 const MAX_HISTORY: usize = 64;
