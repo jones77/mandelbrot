@@ -406,6 +406,43 @@ fn screenToComplex(
     };
 }
 
+/// Push the current view + its pixel data onto the undo history stack.
+/// Truncation of future entries must happen separately before calling this.
+fn pushHistory(
+    history: []HistoryEntry,
+    history_len: *usize,
+    history_ptr: *usize,
+    view: ViewState,
+    image: *rl.Image,
+    screen_w: i32,
+    screen_h: i32,
+) !void {
+    if (history_len.* >= MAX_HISTORY) return;
+    const px_w: usize = @intCast(screen_w);
+    const px_h: usize = @intCast(screen_h);
+    const px_size = px_w * px_h * 4;
+    const pixels = try std.heap.page_allocator.alloc(u8, px_size);
+    @memcpy(pixels, @as([*]u8, @ptrCast(image.data))[0..px_size]);
+    history[history_len.*] = HistoryEntry{
+        .view = view,
+        .pixels = pixels,
+        .w = px_w,
+        .h = px_h,
+    };
+    history_len.* += 1;
+    history_ptr.* = history_len.* - 1;
+}
+
+/// Free pixel data in entries [index..history_len) and shrink history_len
+/// to `index`.  Used to invalidate "future" entries after an undo.
+fn truncateFuture(history: []HistoryEntry, history_len: *usize, index: usize) void {
+    while (index < history_len.*) {
+        history_len.* -= 1;
+        std.heap.page_allocator.free(history[history_len.*].pixels);
+        history[history_len.*].pixels = &[_]u8{};
+    }
+}
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -483,20 +520,7 @@ pub fn main() anyerror!void {
     rl.updateTexture(texture, image.data);
 
     // Seed history with the initial view.
-    {
-        const px_w: usize = @intCast(screen_w);
-        const px_h: usize = @intCast(screen_h);
-        const px_size = px_w * px_h * 4;
-        history[0] = HistoryEntry{
-            .view = view,
-            .pixels = try std.heap.page_allocator.alloc(u8, px_size),
-            .w = px_w,
-            .h = px_h,
-        };
-        @memcpy(history[0].pixels, @as([*]u8, @ptrCast(image.data))[0..px_size]);
-        history_len = 1;
-        history_ptr = 0;
-    }
+    try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
 
     // ---- Main loop ----
     while (!rl.windowShouldClose()) {
@@ -530,15 +554,19 @@ pub fn main() anyerror!void {
             if (my >= by and my < by + BTN_SIZE) {
                 // Minus button (rightmost)
                 if (mx >= screen_w - BTN_GAP - BTN_SIZE and mx < screen_w - BTN_GAP) {
+                    truncateFuture(&history, &history_len, history_ptr + 1);
                     view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
                     render_timed_out = try renderMandelbrot(&image, view, true);
                     rl.updateTexture(texture, image.data);
+                    try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
                 }
                 // Plus button
                 if (mx >= screen_w - BTN_SIZE and mx < screen_w) {
+                    truncateFuture(&history, &history_len, history_ptr + 1);
                     view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
                     render_timed_out = try renderMandelbrot(&image, view, true);
                     rl.updateTexture(texture, image.data);
+                    try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
                 }
             }
         }
@@ -580,13 +608,7 @@ pub fn main() anyerror!void {
 
             // Truncate any "future" entries (left over after an undo)
             // before updating view.
-            if (history_len < MAX_HISTORY) {
-                while (history_ptr + 1 < history_len) {
-                    history_len -= 1;
-                    std.heap.page_allocator.free(history[history_len].pixels);
-                    history[history_len].pixels = &[_]u8{};
-                }
-            }
+            truncateFuture(&history, &history_len, history_ptr + 1);
 
             view.center_x = c_center.x;
             view.center_y = c_center.y;
@@ -610,21 +632,7 @@ pub fn main() anyerror!void {
             rl.updateTexture(texture, image.data);
 
             // Save the new view + its pixels into history (undo target).
-            if (history_len < MAX_HISTORY) {
-                const px_w: usize = @intCast(screen_w);
-                const px_h: usize = @intCast(screen_h);
-                const px_size = px_w * px_h * 4;
-                const pixels = try std.heap.page_allocator.alloc(u8, px_size);
-                @memcpy(pixels, @as([*]u8, @ptrCast(image.data))[0..px_size]);
-                history[history_len] = HistoryEntry{
-                    .view = view,
-                    .pixels = pixels,
-                    .w = px_w,
-                    .h = px_h,
-                };
-                history_len += 1;
-                history_ptr = history_len - 1;
-            }
+            try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
         }
 
         // -- Left / Delete / Backspace -> undo zoom (instantly from cache) --
@@ -671,31 +679,27 @@ pub fn main() anyerror!void {
             }
         }
 
-        // -- +/- keys -> double/halve iterations --
+        // -- +/- keys -> double/halve iterations (saved in history so undoable) --
         {
             const key_inc = rl.isKeyPressed(.equal) or rl.isKeyPressed(.kp_add);
             const key_dec = rl.isKeyPressed(.minus) or rl.isKeyPressed(.kp_subtract);
 
-            var changed = false;
-            if (key_inc) {
-                view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
-                changed = true;
-            } else if (key_dec) {
-                view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
-                changed = true;
-            }
-            if (changed) {
+            if (key_inc or key_dec) {
+                truncateFuture(&history, &history_len, history_ptr + 1);
+                if (key_inc) {
+                    view.max_iters = @min(MAX_ITERS_CAP, view.max_iters +| view.max_iters);
+                } else {
+                    view.max_iters = @max(MIN_ITERS, view.max_iters / 2);
+                }
                 render_timed_out = try renderMandelbrot(&image, view, true);
                 rl.updateTexture(texture, image.data);
+                try pushHistory(&history, &history_len, &history_ptr, view, &image, screen_w, screen_h);
             }
         }
 
         // -- R -> reset (clean up all cached entries) --
         if (rl.isKeyPressed(.r)) {
-            for (0..history_len) |i| {
-                if (history[i].pixels.len > 0)
-                    std.heap.page_allocator.free(history[i].pixels);
-            }
+            truncateFuture(&history, &history_len, 0);
             history_len = 0;
             history_ptr = 0;
             view.center_x = INITIAL_CENTER_X;
