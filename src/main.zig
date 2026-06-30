@@ -23,7 +23,8 @@ const INITIAL_RANGE: f64 = 3.5;
 
 const DEFAULT_MAX_ITERS: u32 = 1024;
 const MIN_ITERS: u32 = 16;
-const MAX_ITERS_CAP: u32 = 65536; // 2^16
+const MAX_ITERS_CAP: u32 = 65536; // 2^16 — manual +/wheel can reach this
+const AUTO_SCALE_CAP: u32 = 16384; // auto-zoom stops here; user opts in higher
 const AUTO_SCALE_SLOPE: f64 = 0.25;
 const PALETTE_DENSITY: f64 = 4.0;
 const MAX_HISTORY: usize = 64;
@@ -527,9 +528,9 @@ pub fn main() anyerror!void {
             const log2_zf = @log(zoom_factor) / @log(2.0);
             const log2_start = @log(@as(f64, @floatFromInt(DEFAULT_MAX_ITERS))) / @log(2.0);
             const target_f = @exp2(log2_start + log2_zf * AUTO_SCALE_SLOPE);
-            const clamped = @min(target_f, @as(f64, @floatFromInt(MAX_ITERS_CAP)));
+            const clamped = @min(target_f, @as(f64, @floatFromInt(AUTO_SCALE_CAP)));
             const target_iters = nextPowerOf2(@as(u32, @intFromFloat(clamped)));
-            if (target_iters > view.max_iters and target_iters <= MAX_ITERS_CAP) {
+            if (target_iters > view.max_iters and target_iters <= AUTO_SCALE_CAP) {
                 view.max_iters = target_iters;
             }
 
