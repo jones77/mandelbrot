@@ -465,27 +465,14 @@ pub fn main() anyerror!void {
             const smaller = @min(screen_w, screen_h);
             const new_range = view.range * (size / @as(f64, @floatFromInt(smaller)));
 
+            // Truncate any "future" entries (left over after an undo)
+            // before updating view.
             if (history_len < MAX_HISTORY) {
-                // Truncate any "future" entries (left over after an undo).
                 while (history_ptr + 1 < history_len) {
                     history_len -= 1;
                     std.heap.page_allocator.free(history[history_len].pixels);
                     history[history_len].pixels = &[_]u8{};
                 }
-                // Save the NEW view + its rendered pixels into the next slot.
-                const px_w: usize = @intCast(screen_w);
-                const px_h: usize = @intCast(screen_h);
-                const px_size = px_w * px_h * 4;
-                const pixels = try std.heap.page_allocator.alloc(u8, px_size);
-                @memcpy(pixels, @as([*]u8, @ptrCast(image.data))[0..px_size]);
-                history[history_len] = HistoryEntry{
-                    .view = view,
-                    .pixels = pixels,
-                    .w = px_w,
-                    .h = px_h,
-                };
-                history_len += 1;
-                history_ptr = history_len - 1;
             }
 
             view.center_x = c_center.x;
@@ -503,8 +490,25 @@ pub fn main() anyerror!void {
 
             try renderMandelbrot(&image, view);
             rl.updateTexture(texture, image.data);
-        }
 
+            // Save the new view + its pixels into history (undo target).
+            if (history_len < MAX_HISTORY) {
+                const px_w: usize = @intCast(screen_w);
+                const px_h: usize = @intCast(screen_h);
+                const px_size = px_w * px_h * 4;
+                const pixels = try std.heap.page_allocator.alloc(u8, px_size);
+                @memcpy(pixels, @as([*]u8, @ptrCast(image.data))[0..px_size]);
+                history[history_len] = HistoryEntry{
+                    .view = view,
+                    .pixels = pixels,
+                    .w = px_w,
+                    .h = px_h,
+                };
+                history_len += 1;
+                history_ptr = history_len - 1;
+            }
+        }
+ 
         // -- Left / Delete / Backspace -> undo zoom (instantly from cache) --
         if (rl.isKeyPressed(.delete) or rl.isKeyPressed(.backspace) or rl.isKeyPressed(.left)) {
             if (history_ptr > 0) {
