@@ -84,32 +84,27 @@ The **Mandelbrot set** is the set of complex numbers *c* where the iteration
 
 ## Code walkthrough
 
-The entire application lives in a single file: `src/main.zig` (~1050 lines).
+The source is split into four files, keeping pure math separable from raylib.
 
 ### Structure
 
 ```
-App struct (mutable state)
-├── ViewState            — current complex-plane centre, range, iterations
-├── history[64]          — undo/redo stack with cached RGBA pixel buffers
-├── drag                 — current mouse-drag coordinates
-├── image / texture      — raylib pixel buffer and GPU texture
-└── screen_w / screen_h  — window dimensions
-
-Module-level functions (pure computation)
-├── Coord / ComplexPoint — helper types for complex coordinates
-├── renderStrip()        — per-pixel hot loop (multi-threaded)
-├── renderMandelbrot()   — thread pool setup + dispatch
-├── screenToComplex()    — pixel → complex-plane coordinate
-├── smoothColor()        — smooth iteration count → RGB colour
-├── hslToRgb()           — HSL → RGB conversion
-├── nextPowerOf2()       — smallest power of two ≥ n
-├── constrainDragSquare()— enforces 1:1 selection box
-├── clearToOpaqueBlack() — fill pixel buffer (alpha fix)
-├── logTimeout()         — print timeout diagnostic
-├── pushHistory()        — save view + pixels to undo stack
-└── truncateFuture()     — free stale entries after undo
+src/main.zig          — entry point (~30 lines)
+src/app.zig           — App struct, UI, undo/redo history, clipboard
+src/renderer.zig      — renderMandelbrot, renderStrip (threading, no raylib)
+src/mandelbrot.zig    — pure math: palette, ViewState, computeReference,
+                        perturbPixel, standardPixel, coordinate helpers
 ```
+
+**mandelbrot.zig** contains all the Mandelbrot-specific computation:
+
+- `Coord` / `ComplexPoint` / `OrbitPoint` / `RefOrbit` — helper types
+- `computeReference()` — f64 reference orbit for perturbation
+- `perturbPixel()` / `standardPixel()` — per-pixel iteration (f32)
+- `continueStandard()` — f64 fallback for glitched perturbation pixels
+- `smoothColor()` / `hslToRgb()` / `buildPalette()` — colour pipeline
+- `screenToComplex()` / `constrainDragSquare()` — coordinate math
+- `clearToOpaqueBlack()` / `nextPowerOf2()` — utilities
 
 ### Frame lifecycle
 
@@ -145,11 +140,29 @@ Mouse drag → constrainDragSquare() → screenToComplex() → new ViewState
 
 ### References used
 
+**Algorithm descriptions (human-readable documents)**
+
 - [Techniques for computer generated pictures – Arnaud Chéritat](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set)
-  — Sections 3.4 (interior detection), 3.5 (boundary/distance estimators),
+  (CC-BY) — Sections 3.4 (interior detection), 3.5 (boundary/distance estimators),
   3.6 (visualisation modes)
 - [Cardioid and bulb checking – Claude Heiland-Allen](https://mathr.co.uk/blog/2022-11-19_cardioid_and_bulb_checking.html)
   — bounding-box optimisation for the per-pixel cardioid/bulb tests
+- [Perturbation theory for the Mandelbrot set – K. I. Martin](http://superfractalthing.co.nf/sft_maths.pdf)
+  — the δ recurrence and series approximation
+- [Perturbation glitches – Claude Heiland-Allen](https://mathr.co.uk/blog/2014-03-31_perturbation_glitches.html)
+  — glitch taxonomy and preperiodic reference point selection
+- [Pauldelbrot's glitch criterion](https://fractalforums.org/fractal-mathematics-and-new-theories/28/glitch-detection/4269)
+  — the `|Z+δ|² < G·|Z|²` test used in the perturbation path
+- [Zhuoran's rebasing technique](https://fractalforums.org/fractal-mathematics-and-new-theories/28/zhuorans-new-perturbation-algorithm-glitch-free-and-much-faster/4443)
+  — re-centering δ against the reference orbit when glitch is detected
+- [DeepDrill – Dirk W. Hoffmann](https://dirkwhoffmann.github.io/DeepDrill/)
+  (GPL v3) — practical reference for perturbation theory with series approximation
+- [mightymandel – Claude Heiland-Allen](https://mightymandel.mathr.co.uk/)
+  (GPL v3+) — GPU-based Mandelbrot explorer using perturbation
+
+All implementation is original Zig code based on the algorithm descriptions above.
+No code was copied from GPL-licensed projects. The mathematical formulas
+(δ recurrence, cardioid test, glitch criterion) are not copyrightable.
 
 If you have raylib installed system-wide:
 
@@ -187,12 +200,16 @@ You can then remove the `dependencies` section from `build.zig.zon`.
 
 ```
 mandelbrot/
-├── README.md
+├── README.md              # this file
+├── AGENTS.md              # agent session context
 ├── build.zig              # zig build script
 ├── build.zig.zon          # package manifest
 ├── cheritat-algorithms.md # condensed algorithm reference
 └── src/
-    └── main.zig           # application source
+    ├── main.zig           # entry point
+    ├── app.zig            # UI, history, clipboard
+    ├── renderer.zig       # multi-threaded rendering
+    └── mandelbrot.zig     # pure math (palette, iteration, perturbation)
 ```
 
 ---
@@ -210,4 +227,4 @@ mandelbrot/
 
 ## License
 
-MIT
+[The Unlicense](UNLICENSE) — public domain.
