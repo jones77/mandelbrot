@@ -283,7 +283,11 @@ pub fn main() anyerror!void {
             const sel_cy = (drag.start_y + drag.current_y) / 2.0;
 
             const c_center = screenToComplex(sel_cx, sel_cy, view, screen_w, screen_h);
-            const new_range = view.range * (size / @as(f64, @floatFromInt(screen_w)));
+
+            // Use the smaller image dimension so a square selection fills
+            // the full height of the zoomed view (no clipping).
+            const smaller = @min(screen_w, screen_h);
+            const new_range = view.range * (size / @as(f64, @floatFromInt(smaller)));
 
             if (history_len < MAX_HISTORY) {
                 history[history_len] = view;
@@ -293,6 +297,14 @@ pub fn main() anyerror!void {
             view.center_x = c_center.x;
             view.center_y = c_center.y;
             view.range = new_range;
+
+            // Auto-scale iterations: deeper zooms need more iterations
+            // to resolve fine detail at the Mandelbrot boundary.
+            const zoom_factor = INITIAL_RANGE / view.range;
+            const target_iters = zoom_factor * 80.0;
+            if (target_iters > 0 and target_iters <= 8192) {
+                view.max_iters = @max(view.max_iters, @as(u32, @intFromFloat(target_iters)));
+            }
 
             renderMandelbrot(&image, view);
             rl.updateTexture(texture, image.data);
