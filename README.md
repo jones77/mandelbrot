@@ -5,8 +5,8 @@ An interactive Mandelbrot set explorer written in [Zig](https://ziglang.org/).
 ## Features
 
 - **1:1 box zoom** — click and drag a square selection to zoom in
-- **Undo** — press Delete/Backspace to return to the previous zoom (up to 64 levels)
-- **Iteration control** — mouse wheel adjusts escape-time detail (32–4096)
+- **Undo/redo** — ← to undo, → to redo (up to 64 levels, instant from pixel cache)
+- **Iteration control** — ± keys or on-screen buttons double/halve detail; auto-scales on zoom
 - **Reset** — press R to return to the default overview
 - **HUD** — shows current complex-plane coordinates, visible range, and iteration limit
 - **Cross-platform** — runs on macOS, Linux, and Windows 11 via raylib
@@ -48,14 +48,16 @@ zig build run
 
 ## Controls
 
-| Action               | Input                           |
-|----------------------|---------------------------------|
-| Zoom in              | Left-drag a square, then release |
-| Undo zoom            | Delete or Backspace             |
-| Reset view           | R                               |
-| More detail          | Mouse wheel up                  |
-| Less detail          | Mouse wheel down                |
-| Close window         | Esc or window close button      |
+| Action               | Input                              |
+|----------------------|------------------------------------|
+| Zoom in              | Left-drag a square, then release   |
+| Undo zoom            | ← or Delete or Backspace           |
+| Redo zoom            | →                                  |
+| Reset view           | R                                  |
+| Double detail        | + key or on-screen [+] button      |
+| Halve detail         | - key or on-screen [-] button      |
+| Continue render      | Space (when timeout fires)         |
+| Close window         | Esc or window close button         |
 
 The selection box is always **1:1 (square)** — the longer side of the drag
 determines the size, so aspect ratio stays correct.
@@ -80,7 +82,74 @@ The **Mandelbrot set** is the set of complex numbers *c* where the iteration
 
 ---
 
-## Alternative: using a system-installed raylib
+## Code walkthrough
+
+The entire application lives in a single file: `src/main.zig` (~1050 lines).
+
+### Structure
+
+```
+App struct (mutable state)
+├── ViewState            — current complex-plane centre, range, iterations
+├── history[64]          — undo/redo stack with cached RGBA pixel buffers
+├── drag                 — current mouse-drag coordinates
+├── image / texture      — raylib pixel buffer and GPU texture
+└── screen_w / screen_h  — window dimensions
+
+Module-level functions (pure computation)
+├── Coord / ComplexPoint — helper types for complex coordinates
+├── renderStrip()        — per-pixel hot loop (multi-threaded)
+├── renderMandelbrot()   — thread pool setup + dispatch
+├── screenToComplex()    — pixel → complex-plane coordinate
+├── smoothColor()        — smooth iteration count → RGB colour
+├── hslToRgb()           — HSL → RGB conversion
+├── nextPowerOf2()       — smallest power of two ≥ n
+├── constrainDragSquare()— enforces 1:1 selection box
+├── clearToOpaqueBlack() — fill pixel buffer (alpha fix)
+├── logTimeout()         — print timeout diagnostic
+├── pushHistory()        — save view + pixels to undo stack
+└── truncateFuture()     — free stale entries after undo
+```
+
+### Frame lifecycle
+
+Each frame calls three App methods:
+
+```
+1. handleResize() — detect window resize, reallocate buffer, re-render
+2. handleInput()  — buttons, drag, zoom, undo/redo, ± keys, reset, continue
+3. drawFrame()    — clear, draw texture, selection rect, HUD, buttons
+```
+
+### Rendering pipeline
+
+```
+Mouse drag → constrainDragSquare() → screenToComplex() → new ViewState
+  → renderMandelbrot() spawns 8 threads
+    → each renderStrip() iterates z = z² + c for its row range
+      → escape? colour from smoothColor()
+      → derivative → 0? interior point, leave black
+      → orbit periodic? interior point, leave black
+      → timeout? return partial image
+  → updateTexture() uploads RGBA buffer to GPU
+```
+
+### Interior detection (three layers, fastest first)
+
+1. **Cardioid/bulb** — O(1) check on `c` itself, no iteration needed.
+   Bounding-box test skips this when zoomed far from those shapes.
+2. **Derivative** — `(P^n)'(c)` shrinks toward 0 for interior points.
+   Threshold scales with `max_iters` (tighter at shallow zooms).
+3. **Orbit periodicity** — `z` stored at power-of-2 iterations; if `z`
+   returns to a previous value the orbit is periodic.
+
+### References used
+
+- [Techniques for computer generated pictures – Arnaud Chéritat](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set)
+  — Sections 3.4 (interior detection), 3.5 (boundary/distance estimators),
+  3.6 (visualisation modes)
+- [Cardioid and bulb checking – Claude Heiland-Allen](https://mathr.co.uk/blog/2022-11-19_cardioid_and_bulb_checking.html)
+  — bounding-box optimisation for the per-pixel cardioid/bulb tests
 
 If you have raylib installed system-wide:
 

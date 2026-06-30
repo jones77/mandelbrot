@@ -37,6 +37,57 @@ implemented.  Future agents should focus on the visualisation modes.
 - 30-second render timeout with Space-to-continue
 - Unit tests for pure functions (`zig build test`)
 
+## Architectural decisions
+
+### App struct + methods (not module-level functions)
+
+All mutable state lives in a single `App` struct: `ViewState`, undo history,
+window dimensions, the raylib image and texture, and drag state.  Each frame
+is three method calls: `handleResize`, `handleInput`, `drawFrame`.  This
+kept `main()` from growing past ~25 lines and makes the frame lifecycle
+explicit.  Methods that modify app state are on `*App`; pure computation
+functions stay at module level.
+
+### Command pattern for undo/redo
+
+Zoom and iteration changes both snapshot the current view + pixel buffer
+before mutating.  The history is a fixed-size `[64]HistoryEntry` ring
+buffer with a `ptr` into it — undo decrements, redo increments.  Entries
+are freed only when a new action would overwrite them (truncate future).
+The pixel cache makes undo/redo instant (memcpy instead of re-render).
+
+### f32 inner loop for speed
+
+The hot path uses `f32` (was `f64`) to double SIMD width on NEON and
+halve memory traffic.  View‑level maths (`range`, `center`, bounding‑box
+checks) stay in `f64` — only per‑pixel `c`, `z`, and derivative are
+cast down.  The smooth‑colouring `mu` is cast back to `f64` for the
+palette function (an exact conversion).  At extreme zoom depths f32
+precision degrades — see perturbation theory below for the long‑term fix.
+
+### Pixel buffer cache for undo history
+
+Each history entry holds a `[]u8` (RGBA) copy of the full frame at that
+zoom level.  At 900×800 that's ~2.75 MB per entry; 64 entries is ~176 MB
+worst case.  The trade‑off — memory for instant undo/redo — is worth it
+for an interactive viewer.  Resize clears history (cached pixels are the
+wrong size).
+
+### Interior detection strategy (three layers)
+
+1. **Cardioid/bulb pre‑check** (O(1), no iteration): tests if `c` is in
+   the main cardioid or period‑2 bulb.  Bounding‑box rejection skips this
+   entirely when the view is far from those shapes.
+2. **Derivative tracking** (per iteration): `(P^n)'(c)` → 0 for interior
+   points.  Scaled epsilon: `1e-6 × (max_iters / DEFAULT_MAX_ITERS)`.
+3. **Orbit periodicity** (per iteration): stores `z` at power‑of‑2
+   iteration counts; if `z` returns within `1e-8` of a stored value the
+   orbit is periodic → inside M.
+
+Layers 2 and 3 stop iteration early for interior points, which is the
+main speed win at high iteration counts.  Layer 1 catches the most
+common case (main body) with zero iteration cost.
+
 ## Future optimizations
 
 ### Perturbation theory (major speedup for deep zooms)
