@@ -71,28 +71,26 @@ fn renderStrip(ctx: *RenderStrip) void {
 
             // Path selection: perturbation (if ref available) > f64 (if deep zoom or high iters) > f32 standard.
             const mu: f32 = if (cfg.ref_orbit) |orbit| blk: {
-                const dcx: f32 = @floatCast(cx_f64 - orbit[0].zx);
-                const dcy: f32 = @floatCast(cy_f64 - orbit[0].zy);
-                var dx: f32 = dcx;
-                var dy: f32 = dcy;
+                const dcx = @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w -| 1)) - 0.5 * cfg.range_x;
+                const dcy = @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h -| 1)) - 0.5 * cfg.range_y;
+                var dx: f64 = dcx;
+                var dy: f64 = dcy;
                 var iter: u32 = 0;
 
                 var result: f32 = max_f;
                 while (iter < max_iters) : (iter += 1) {
                     const ref = &orbit[iter];
 
-                    const Zx: f32 = @floatCast(ref.zx);
-                    const Zy: f32 = @floatCast(ref.zy);
+                    const Zx = ref.zx;
+                    const Zy = ref.zy;
                     const Z_norm_sq = Zx * Zx + Zy * Zy;
 
-                    // Rebase args (f64) — computed once for all glitch/overflow exits.
-                    const rebase_zx = ref.zx + @as(f64, dx);
-                    const rebase_zy = ref.zy + @as(f64, dy);
-                    const rebase_cx = orbit[0].zx + @as(f64, dcx);
-                    const rebase_cy = orbit[0].zy + @as(f64, dcy);
+                    const rebase_zx = ref.zx + dx;
+                    const rebase_zy = ref.zy + dy;
+                    const rebase_cx = orbit[0].zx + dcx;
+                    const rebase_cy = orbit[0].zy + dcy;
                     const rebase_norm_sq = rebase_zx * rebase_zx + rebase_zy * rebase_zy;
 
-                    // 1. Z overflow check (f32): catch f32 infinity before any f32 ops.
                     if (!std.math.isFinite(Z_norm_sq)) {
                         if (std.math.isFinite(ref.zx + ref.zy)) {
                             result = m.rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
@@ -102,26 +100,20 @@ fn renderStrip(ctx: *RenderStrip) void {
                         break;
                     }
 
-                    // 2. Pauldelbrot glitch (f64): |z|² / |Z|² < ε.
-                    //    Computed in f64 so δ is preserved when |Z| ≫ |δ|.
-                    //    Restarts from scratch because δ has f32 rounding error.
                     if (cfg.glitch_eps_sq > 0) {
-                        const Z_norm_sq_f64 = ref.zx * ref.zx + ref.zy * ref.zy;
-                        if (Z_norm_sq_f64 > @as(f64, m.GLITCH_MIN_NORM_SQ) and
-                            rebase_norm_sq < @as(f64, cfg.glitch_eps_sq) * Z_norm_sq_f64)
+                        if (Z_norm_sq > @as(f64, m.GLITCH_MIN_NORM_SQ) and
+                            rebase_norm_sq < @as(f64, cfg.glitch_eps_sq) * Z_norm_sq)
                         {
                             result = m.rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
                             break;
                         }
                     }
 
-                    // 3. Zhuoran rebasing: |δ|² > |Z|².
                     if (dx * dx + dy * dy > Z_norm_sq) {
                         result = m.rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
                         break;
                     }
 
-                    // 4. Escape check (f64): preserves δ when |Z| ≫ |δ|.
                     if (rebase_norm_sq > m.ESCAPE_RADIUS_SQ) {
                         if (std.math.isFinite(rebase_norm_sq)) {
                             result = @floatCast(m.smoothIteration(iter, rebase_norm_sq));

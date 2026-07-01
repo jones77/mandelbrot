@@ -13,7 +13,7 @@ pub const GLITCH_EPSILON: f32 = 1e-4;
 /// Minimum |Z|² required before applying the Pauldelbrot check — avoids
 /// division by near-zero when the reference hasn't escaped yet.
 pub const GLITCH_MIN_NORM_SQ: f32 = 1e-10;
-pub const DEFAULT_MAX_ITERS: u32 = 1024;
+pub const DEFAULT_MAX_ITERS: u32 = 2048;
 pub const MIN_ITERS: u32 = 16;
 pub const MAX_ITERS_CAP: u32 = 65536;
 pub const AUTO_SCALE_CAP: u32 = 16384;
@@ -66,9 +66,7 @@ test "smoothColor with NaN or inf returns black" {
 
 test "computeReference at high max_iters" {
     const max_iters: u32 = 8192;
-    const orbit = (try computeReference(1.0, 0.0, max_iters, std.testing.allocator)) orelse {
-        @panic("expected non-null orbit");
-    };
+    const orbit = try computeReference(1.0, 0.0, max_iters, std.testing.allocator);
     defer std.testing.allocator.free(orbit);
     try testing.expectEqual(@as(usize, 8192), orbit.len);
 
@@ -207,24 +205,17 @@ pub fn smoothColor(mu: f64, max_iters: u32) [4]u8 {
 
 // ========================= Iteration =========================
 
-pub fn computeReference(cx: f64, cy: f64, max_iters: u32, allocator: std.mem.Allocator) !?[]RefOrbit {
+pub fn computeReference(cx: f64, cy: f64, max_iters: u32, allocator: std.mem.Allocator) ![]RefOrbit {
     const orbit = try allocator.alloc(RefOrbit, max_iters);
     var zx: f64 = cx;
     var zy: f64 = cy;
-    var ref_interior: bool = true;
 
     for (0..max_iters) |i| {
         orbit[i] = .{ .zx = zx, .zy = zy };
         const zx2 = zx * zx;
         const zy2 = zy * zy;
-        if (zx2 + zy2 > ESCAPE_RADIUS_SQ) ref_interior = false;
         zy = 2.0 * zx * zy + cy;
         zx = zx2 - zy2 + cx;
-    }
-
-    if (ref_interior) {
-        allocator.free(orbit);
-        return null;
     }
 
     return orbit[0..max_iters];
@@ -657,15 +648,16 @@ test "screenToComplex inverse consistency" {
     try testing.expect(c.y >= -1.75 and c.y <= 1.75);
 }
 
-test "computeReference interior point returns empty" {
+test "computeReference interior point returns orbit" {
     const result = try computeReference(-0.5, 0.0, 1024, std.testing.allocator);
-    try testing.expect(result == null);
+    defer std.testing.allocator.free(result);
+    try testing.expectEqual(@as(usize, 1024), result.len);
+    try testing.expectApproxEqAbs(@as(f64, -0.5), result[0].zx, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.0), result[0].zy, 1e-12);
 }
 
 test "computeReference exterior point returns orbit" {
-    const result = (try computeReference(1.0, 0.0, 1024, std.testing.allocator)) orelse {
-        @panic("expected non-null orbit");
-    };
+    const result = try computeReference(1.0, 0.0, 1024, std.testing.allocator);
     defer std.testing.allocator.free(result);
     try testing.expectEqual(@as(usize, 1024), result.len);
     try testing.expectApproxEqAbs(@as(f64, 1.0), result[0].zx, 1e-12);
@@ -678,23 +670,20 @@ test "computeReference exterior point returns orbit" {
 }
 
 test "computeReference far exterior escapes immediately" {
-    const result = (try computeReference(2.0, 0.0, 1024, std.testing.allocator)) orelse {
-        @panic("expected non-null orbit");
-    };
+    const result = try computeReference(2.0, 0.0, 1024, std.testing.allocator);
     defer std.testing.allocator.free(result);
     try testing.expectEqual(@as(usize, 1024), result.len);
     try testing.expect(result[1].zx * result[1].zx + result[1].zy * result[1].zy > 4.0);
 }
 
-test "computeReference max_iters=0 interior returns null" {
+test "computeReference max_iters=0 returns empty orbit" {
     const result = try computeReference(-0.5, 0.0, 0, std.testing.allocator);
-    try testing.expect(result == null);
+    defer std.testing.allocator.free(result);
+    try testing.expectEqual(@as(usize, 0), result.len);
 }
 
 test "computeReference max_iters=1 exterior escapes at start" {
-    const result = (try computeReference(2.5, 0.0, 1, std.testing.allocator)) orelse {
-        @panic("expected non-null orbit");
-    };
+    const result = try computeReference(2.5, 0.0, 1, std.testing.allocator);
     defer std.testing.allocator.free(result);
     try testing.expectEqual(@as(usize, 1), result.len);
     try testing.expect(result[0].zx * result[0].zx + result[0].zy * result[0].zy > 4.0);
@@ -815,9 +804,7 @@ test "perturbation interior point classified interior" {
     const pix_cx: f32 = 0.24;
     const pix_cy: f32 = 0.0;
     const max_iters: u32 = 128;
-    const orbit = (try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator)) orelse {
-        @panic("expected exterior reference");
-    };
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
     defer std.testing.allocator.free(orbit);
 
     const mu_p = perturbPixel(pix_cx - ref_cx, pix_cy - ref_cy, orbit, max_iters);
@@ -833,9 +820,7 @@ test "perturbPixel with large offset escapes immediately" {
     const dcx: f32 = 2.0;
     const dcy: f32 = 0.0;
     const max_iters: u32 = 128;
-    const orbit = (try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator)) orelse {
-        @panic("expected exterior reference");
-    };
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
     defer std.testing.allocator.free(orbit);
 
     const mu = perturbPixel(dcx, dcy, orbit, max_iters);
@@ -1065,9 +1050,7 @@ test "perturbation matches groundTruthPixel at exterior points" {
     };
 
     for (cases) |c| {
-        const orbit = (try computeReference(c.ref_cx, c.ref_cy, c.max_iters, std.testing.allocator)) orelse {
-            @panic("expected exterior reference");
-        };
+        const orbit = try computeReference(c.ref_cx, c.ref_cy, c.max_iters, std.testing.allocator);
         defer std.testing.allocator.free(orbit);
 
         const pix_cx = c.ref_cx + @as(f64, @floatCast(c.dcx));
@@ -1083,14 +1066,10 @@ test "perturbation matches groundTruthPixel at exterior points" {
 }
 
 test "perturbation interior with small offsets" {
-    // For interior points near an exterior reference, verify perturbPixel
-    // returns max_iters (doesn't misclassify as exterior).
     const ref_cx: f32 = 0.3;
     const ref_cy: f32 = 0.0;
     const max_iters: u32 = 128;
-    const orbit = (try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator)) orelse {
-        @panic("expected exterior reference");
-    };
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
     defer std.testing.allocator.free(orbit);
 
     const dcx: f32 = -0.06;
@@ -1184,56 +1163,22 @@ test "regression: big black circle at Seahorse Valley" {
         .{ .dx = 0.7 * range, .dy = 0.0 },
     };
 
-    // Try perturbation — only valid if reference is exterior
-    if (try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator)) |orbit| {
-        defer std.testing.allocator.free(orbit);
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
 
-        for (offsets) |off| {
-            const dcx: f32 = @floatCast(off.dx);
-            const dcy: f32 = @floatCast(off.dy);
-            const pix_cx = ref_cx + off.dx;
-            const pix_cy = ref_cy + off.dy;
-            const mu_p = perturbPixel(dcx, dcy, orbit, max_iters);
-            const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
+    for (offsets) |off| {
+        const dcx: f32 = @floatCast(off.dx);
+        const dcy: f32 = @floatCast(off.dy);
+        const pix_cx = ref_cx + off.dx;
+        const pix_cy = ref_cy + off.dy;
+        const mu_p = perturbPixel(dcx, dcy, orbit, max_iters);
+        const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
 
-            if (gt.escaped) {
-                // Must classify as exterior
-                try testing.expect(mu_p < @as(f32, @floatFromInt(max_iters)));
-                const mu_gt_f64 = smoothIteration(gt.iter, gt.zx * gt.zx + gt.zy * gt.zy);
-                const mu_gt: f32 = @floatCast(mu_gt_f64);
-                try testing.expectApproxEqAbs(mu_gt, mu_p, 0.5);
-            }
-            // Interior points: perturbation may or may not return max_iters
-            // (δ-periodicity bug was already removed)
-        }
-    } else {
-        // Reference is interior — all pixels use standardPixel (f32).
-        // Check that standardPixel agrees with ground truth at the offsets.
-        for (offsets) |off| {
-            const pix_cx: f32 = @floatCast(ref_cx + off.dx);
-            const pix_cy: f32 = @floatCast(ref_cy + off.dy);
-            const pix_cx_f64 = ref_cx + off.dx;
-            const pix_cy_f64 = ref_cy + off.dy;
-            const mu_s = standardPixel(pix_cx, pix_cy, max_iters, INTERIOR_BASE_EPSILON_SQ, PERIODICITY_BASE_EPSILON_SQ);
-            const mu_rb = rebaseFallback(pix_cx_f64, pix_cy_f64, pix_cx_f64, pix_cy_f64, 0, max_iters);
-            const gt = groundTruthPixel(pix_cx_f64, pix_cy_f64, max_iters);
-
-            if (gt.escaped) {
-                // regression: standardPixel (f32) misclassifies boundary
-                // pixels as interior at high iteration counts (8192) due
-                // to f32 precision loss in the orbit recurrence.
-                const std_passed = mu_s < @as(f32, @floatFromInt(max_iters));
-                // fix: rebaseFallback (f64) correctly classifies exterior
-                // pixels because f64 preserves orbit precision.
-                const rb_passed = mu_rb < @as(f32, @floatFromInt(max_iters));
-                if (!std_passed or !rb_passed) {
-                    std.debug.print("\n  offset ({d:.10}, {d:.10}): std={d:.1} (ok={}), rb={d:.1} (ok={})", .{ off.dx, off.dy, mu_s, std_passed, mu_rb, rb_passed });
-                }
-                // Accept either path succeeding — the renderer will use
-                // rebaseFallback (f64) when max_iters > 4096 and the
-                // reference is interior.
-                try testing.expect(rb_passed);
-            }
+        if (gt.escaped) {
+            try testing.expect(mu_p < @as(f32, @floatFromInt(max_iters)));
+            const mu_gt_f64 = smoothIteration(gt.iter, gt.zx * gt.zx + gt.zy * gt.zy);
+            const mu_gt: f32 = @floatCast(mu_gt_f64);
+            try testing.expectApproxEqAbs(mu_gt, mu_p, 0.5);
         }
     }
 }
@@ -1260,34 +1205,17 @@ test "regression: f32 precision at 4096 iters near minibrot" {
         .{ .dx = 0.5 * range, .dy = 0.0 },
     };
 
-    if (try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator)) |orbit| {
-        defer std.testing.allocator.free(orbit);
-        for (offsets) |off| {
-            const dcx: f32 = @floatCast(off.dx);
-            const dcy: f32 = @floatCast(off.dy);
-            const pix_cx = ref_cx + off.dx;
-            const pix_cy = ref_cy + off.dy;
-            const mu_p = perturbPixel(dcx, dcy, orbit, max_iters);
-            const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
-            if (gt.escaped) {
-                try testing.expect(mu_p < @as(f32, @floatFromInt(max_iters)));
-            }
-        }
-    } else {
-        for (offsets) |off| {
-            const pix_cx_f64 = ref_cx + off.dx;
-            const pix_cy_f64 = ref_cy + off.dy;
-            const mu_s = standardPixel(@floatCast(pix_cx_f64), @floatCast(pix_cy_f64), max_iters, INTERIOR_BASE_EPSILON_SQ, PERIODICITY_BASE_EPSILON_SQ);
-            const mu_rb = rebaseFallback(pix_cx_f64, pix_cy_f64, pix_cx_f64, pix_cy_f64, 0, max_iters);
-            const gt = groundTruthPixel(pix_cx_f64, pix_cy_f64, max_iters);
-            if (gt.escaped) {
-                const std_passed = mu_s < @as(f32, @floatFromInt(max_iters));
-                const rb_passed = mu_rb < @as(f32, @floatFromInt(max_iters));
-                if (!std_passed or !rb_passed) {
-                    std.debug.print("\n  offset ({d:.10}, {d:.10}): std={d:.1} (ok={}), rb={d:.1} (ok={})", .{ off.dx, off.dy, mu_s, std_passed, mu_rb, rb_passed });
-                }
-                try testing.expect(rb_passed);
-            }
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
+    for (offsets) |off| {
+        const dcx: f32 = @floatCast(off.dx);
+        const dcy: f32 = @floatCast(off.dy);
+        const pix_cx = ref_cx + off.dx;
+        const pix_cy = ref_cy + off.dy;
+        const mu_p = perturbPixel(dcx, dcy, orbit, max_iters);
+        const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
+        if (gt.escaped) {
+            try testing.expect(mu_p < @as(f32, @floatFromInt(max_iters)));
         }
     }
 }
@@ -1305,9 +1233,7 @@ test "regression: f64 escape check preserves delta at deep zoom" {
     const ref_cy: f64 = 0.0;
     const max_iters: u32 = 4096;
 
-    const orbit = (try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator)) orelse {
-        @panic("expected exterior reference at (0.3, 0.0)");
-    };
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
     defer std.testing.allocator.free(orbit);
 
     // Interior pixel inside the main cardioid — must remain interior.
@@ -1342,9 +1268,7 @@ test "regression: reference f64 overflow at 65536 iterations" {
     const ref_cy: f64 = 0.0;
     const max_iters: u32 = 65536;
 
-    const orbit = (try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator)) orelse {
-        @panic("expected exterior reference at (0.3, 0.0)");
-    };
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
     defer std.testing.allocator.free(orbit);
 
     // Interior pixel: Pauldelbrot fires, restarts from scratch → max_iters.

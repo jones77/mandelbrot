@@ -3,17 +3,63 @@ const rl = @import("raylib");
 const m = @import("mandelbrot.zig");
 const renderer = @import("renderer.zig");
 
-const HUD_HEIGHT: i32 = 26;
-const TOP_BAR: i32 = 30;
+const DEFAULT_W: i32 = 900;
+const DEFAULT_H: i32 = 800;
+
+const LINE1_H: i32 = 32;
+const LINE2_H: i32 = 28;
+const TOTAL_TOP: i32 = LINE1_H + LINE2_H;
 const TOP_PAD: i32 = 4;
-const TB_H: i32 = 22;
+const TB_H: i32 = 26;
 const BTN_GAP: i32 = 4;
-const BTN_SM: i32 = 28;
-const BTN_LG: i32 = 86;
+const BTN_ARROW: i32 = 28;
+const BTN_ITER: i32 = 35;
+const BTN_LG: i32 = 55;
+const BTN_RESET: i32 = 55;
 const TB_CAP: usize = 127;
 const MAX_HISTORY: usize = 64;
 const MIN_SELECTION_PX: f64 = 8.0;
 const RENDER_TIMEOUT_S: f64 = 30.0;
+const CLIPBOARD_BUF: usize = 256;
+
+const COL_BG = rl.Color{ .r = 240, .g = 240, .b = 245, .a = 255 };
+const COL_BAR = rl.Color{ .r = 235, .g = 235, .b = 240, .a = 255 };
+const COL_SEP = rl.Color{ .r = 190, .g = 190, .b = 200, .a = 255 };
+const COL_TEXT = rl.Color{ .r = 30, .g = 30, .b = 40, .a = 255 };
+const COL_BTN_TEXT = rl.Color{ .r = 50, .g = 50, .b = 60, .a = 255 };
+const COL_HINT = rl.Color{ .r = 60, .g = 60, .b = 70, .a = 255 };
+const COL_TB_BG = rl.Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
+const COL_TB_BORDER_ACTIVE = rl.Color{ .r = 0, .g = 120, .b = 255, .a = 255 };
+const COL_TB_BORDER = rl.Color{ .r = 180, .g = 180, .b = 190, .a = 255 };
+const COL_BTN_BG = rl.Color{ .r = 230, .g = 230, .b = 238, .a = 255 };
+const COL_BTN_BG_HOVER = rl.Color{ .r = 220, .g = 220, .b = 228, .a = 255 };
+const COL_BTN_BORDER = rl.Color{ .r = 180, .g = 180, .b = 190, .a = 255 };
+const COL_TIMEOUT = rl.Color{ .r = 200, .g = 80, .b = 40, .a = 255 };
+const COL_DRAG_FILL = rl.Color{ .r = 0, .g = 200, .b = 0, .a = 50 };
+const COL_DRAG_BORDER = rl.Color{ .r = 0, .g = 200, .b = 0, .a = 200 };
+
+const TEXT_PAD_X: i32 = 6;
+const TEXT_PAD_Y: i32 = 4;
+const BTN_TEXT_PAD_X: i32 = 6;
+const BTN_TEXT_PAD_Y: i32 = 5;
+const ARROW_PAD_X: i32 = 6;
+const ARROW_PAD_Y: i32 = 3;
+const HINT_PAD_X: i32 = 10;
+const HINT_PAD_Y: i32 = 4;
+const CURSOR_W: i32 = 2;
+const CURSOR_H: i32 = 18;
+
+const FONT_SIZE_LG: f32 = 18.0;
+const FONT_SIZE_BTN: i32 = 18;
+const FONT_SIZE_ARROW: i32 = 18;
+const FONT_SIZE_TIMEOUT: i32 = 18;
+
+const FONT_LOAD_SIZE: i32 = 24;
+const ASCII_PRN_MIN: i32 = 32;
+const ASCII_PRN_MAX: i32 = 126;
+const ASCII_PRN_COUNT = ASCII_PRN_MAX - ASCII_PRN_MIN + 1;
+const ARROW_L_CP: i32 = 0x2190;
+const ARROW_R_CP: i32 = 0x2192;
 
 const TextBuf = struct {
     buf: [TB_CAP + 1]u8,
@@ -164,6 +210,9 @@ pub const App = struct {
     render_timed_out: bool,
     screen_w: i32,
     screen_h: i32,
+    render_w: i32,
+    render_h: i32,
+    dpi_scale: i32,
     image: rl.Image,
     texture: rl.Texture2D,
     drag: DragState,
@@ -175,7 +224,11 @@ pub const App = struct {
         m.buildPalette();
         const sw = rl.getScreenWidth();
         const sh = rl.getScreenHeight();
-        const vh = sh - TOP_BAR - HUD_HEIGHT;
+        const dpi = @divTrunc(sw, DEFAULT_W);
+        const rw = @divExact(sw, dpi);
+        const rh = @divExact(sh, dpi);
+        const top_phys = TOTAL_TOP * dpi;
+        const vh = sh - top_phys;
         const img = rl.genImageColor(sw, vh, .black);
         const tex = try rl.loadTextureFromImage(img);
 
@@ -193,6 +246,9 @@ pub const App = struct {
             .render_timed_out = false,
             .screen_w = sw,
             .screen_h = sh,
+            .render_w = rw,
+            .render_h = rh,
+            .dpi_scale = dpi,
             .image = img,
             .texture = tex,
             .drag = DragState{ .start_x = 0, .start_y = 0, .current_x = 0, .current_y = 0, .active = false },
@@ -207,7 +263,12 @@ pub const App = struct {
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             };
             for (candidates) |path| {
-                const f = rl.loadFontEx(path, 16, null) catch continue;
+                const CP_COUNT = ASCII_PRN_COUNT + 2;
+                var cps: [CP_COUNT]i32 = undefined;
+                for (0..@as(usize, @intCast(ASCII_PRN_COUNT))) |i| cps[i] = @as(i32, @intCast(i + ASCII_PRN_MIN));
+                cps[@as(usize, @intCast(ASCII_PRN_COUNT))] = ARROW_L_CP;
+                cps[@as(usize, @intCast(ASCII_PRN_COUNT + 1))] = ARROW_R_CP;
+                const f = rl.loadFontEx(path, FONT_LOAD_SIZE, &cps) catch continue;
                 if (f.texture.id > 0) {
                     app.ui_font = f;
                     break;
@@ -216,6 +277,7 @@ pub const App = struct {
             }
         }
 
+        rl.setTextureFilter(app.texture, .point);
         app.syncTextBox();
         return app;
     }
@@ -269,7 +331,7 @@ pub const App = struct {
     }
 
     fn syncTextBox(self: *App) void {
-        self.tb_buf.format("x={d:.6} y={d:.6} range={e:.6} iters={d}", .{
+        self.tb_buf.format(VIEW_FMT, .{
             self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters,
         });
     }
@@ -287,6 +349,30 @@ pub const App = struct {
         try self.saveSnapshot();
     }
 
+    const VIEW_FMT = "x={d:.8} y={d:.8} range={e:.8} iters={d}";
+
+    fn adjustIters(self: *App, increase: bool) !void {
+        truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
+        self.view.max_iters = if (increase)
+            @min(m.MAX_ITERS_CAP, self.view.max_iters +| self.view.max_iters)
+        else
+            @max(m.MIN_ITERS, self.view.max_iters / 2);
+        _ = try self.renderFresh(true);
+        try self.saveSnapshot();
+    }
+
+    fn resetView(self: *App) !void {
+        truncateFuture(&self.history, &self.history_len, 0);
+        self.history_len = 0;
+        self.history_ptr = 0;
+        self.view.center_x = m.INITIAL_CENTER_X;
+        self.view.center_y = m.INITIAL_CENTER_Y;
+        self.view.range = m.INITIAL_RANGE;
+        self.view.max_iters = m.DEFAULT_MAX_ITERS;
+        _ = try self.renderFresh(true);
+        try self.saveSnapshot();
+    }
+
     pub fn handleResize(self: *App) !void {
         const new_w = rl.getScreenWidth();
         const new_h = rl.getScreenHeight();
@@ -294,33 +380,39 @@ pub const App = struct {
 
         self.screen_w = new_w;
         self.screen_h = new_h;
-        const vh = new_h - TOP_BAR - HUD_HEIGHT;
+        self.render_w = @divExact(new_w, self.dpi_scale);
+        self.render_h = @divExact(new_h, self.dpi_scale);
+        const vh = new_h - TOTAL_TOP * self.dpi_scale;
         rl.unloadTexture(self.texture);
         rl.unloadImage(self.image);
         self.image = rl.genImageColor(new_w, vh, .black);
         self.texture = try rl.loadTextureFromImage(self.image);
+        rl.setTextureFilter(self.texture, .point);
         _ = try self.renderFresh(true);
     }
 
     pub fn handleInput(self: *App) !void {
         const mx = rl.getMouseX();
         const my = rl.getMouseY();
-        const in_top_bar = my < TOP_BAR;
-        const in_hud = my >= self.screen_h - HUD_HEIGHT;
+        const in_top = my < TOTAL_TOP;
         var tb_click_consumed = false;
 
         // -- Top bar interactions (text box, buttons) --
-        if (in_top_bar and rl.isMouseButtonPressed(.left)) {
-            const tb_x: i32 = TOP_PAD;
-            const tb_y: i32 = (TOP_BAR - TB_H) / 2;
+        if (in_top and rl.isMouseButtonPressed(.left)) {
+            const tb_y: i32 = (LINE1_H - TB_H) / 2;
 
-            const paste_x = self.screen_w - TOP_PAD - BTN_LG;
+            const arrow_l_x: i32 = TOP_PAD;
+            const arrow_r_x: i32 = arrow_l_x + BTN_ARROW + BTN_GAP;
+            const tb_start_x: i32 = arrow_r_x + BTN_ARROW + BTN_GAP;
+
+            const reset_x = self.render_w - TOP_PAD - BTN_RESET;
+            const paste_x = reset_x - BTN_GAP - BTN_LG;
             const copy_x = paste_x - BTN_GAP - BTN_LG;
-            const plus_x = copy_x - BTN_GAP - BTN_SM;
-            const minus_x = plus_x - BTN_GAP - BTN_SM;
-            const tb_w = minus_x - BTN_GAP - TOP_PAD;
+            const dec_x = copy_x - BTN_GAP - BTN_ITER;
+            const inc_x = dec_x - BTN_GAP - BTN_ITER;
+            const tb_w = inc_x - BTN_GAP - tb_start_x;
 
-            const in_tb = mx >= tb_x and mx < tb_x + tb_w and my >= tb_y and my < tb_y + TB_H;
+            const in_tb = mx >= tb_start_x and mx < tb_start_x + tb_w and my >= tb_y and my < tb_y + TB_H;
             if (in_tb) {
                 self.tb_active = true;
                 tb_click_consumed = true;
@@ -330,23 +422,33 @@ pub const App = struct {
                     self.syncTextBox();
                     tb_click_consumed = true;
                 }
-                if (mx >= minus_x and mx < minus_x + BTN_SM and my >= tb_y and my < tb_y + TB_H) {
-                    truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
-                    self.view.max_iters = @max(m.MIN_ITERS, self.view.max_iters / 2);
-                    _ = try self.renderFresh(true);
-                    try self.saveSnapshot();
+                if (mx >= arrow_l_x and mx < arrow_l_x + BTN_ARROW and my >= tb_y and my < tb_y + TB_H) {
+                    if (self.history_ptr > 0) {
+                        self.history_ptr -= 1;
+                        self.view = self.history[self.history_ptr].view;
+                        try self.restoreCached(&self.history[self.history_ptr]);
+                    }
                     tb_click_consumed = true;
                 }
-                if (mx >= plus_x and mx < plus_x + BTN_SM and my >= tb_y and my < tb_y + TB_H) {
-                    truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
-                    self.view.max_iters = @min(m.MAX_ITERS_CAP, self.view.max_iters +| self.view.max_iters);
-                    _ = try self.renderFresh(true);
-                    try self.saveSnapshot();
+                if (mx >= arrow_r_x and mx < arrow_r_x + BTN_ARROW and my >= tb_y and my < tb_y + TB_H) {
+                    if (self.history_ptr + 1 < self.history_len) {
+                        self.history_ptr += 1;
+                        self.view = self.history[self.history_ptr].view;
+                        try self.restoreCached(&self.history[self.history_ptr]);
+                    }
+                    tb_click_consumed = true;
+                }
+                if (mx >= inc_x and mx < inc_x + BTN_ITER and my >= tb_y and my < tb_y + TB_H) {
+                    try self.adjustIters(true);
+                    tb_click_consumed = true;
+                }
+                if (mx >= dec_x and mx < dec_x + BTN_ITER and my >= tb_y and my < tb_y + TB_H) {
+                    try self.adjustIters(false);
                     tb_click_consumed = true;
                 }
                 if (mx >= copy_x and mx < copy_x + BTN_LG and my >= tb_y and my < tb_y + TB_H) {
-                    var buf: [256]u8 = undefined;
-                    const text = std.fmt.bufPrintZ(&buf, "x={d:.6} y={d:.6} range={e:.6} iters={d}", .{
+                    var buf: [CLIPBOARD_BUF]u8 = undefined;
+                    const text = std.fmt.bufPrintZ(&buf, VIEW_FMT, .{
                         self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters,
                     }) catch unreachable;
                     rl.setClipboardText(text);
@@ -365,10 +467,14 @@ pub const App = struct {
                     }
                     tb_click_consumed = true;
                 }
+                if (mx >= reset_x and mx < reset_x + BTN_RESET and my >= tb_y and my < tb_y + TB_H) {
+                    try self.resetView();
+                    tb_click_consumed = true;
+                }
             }
         }
 
-        if (self.tb_active and rl.isMouseButtonPressed(.left) and !in_top_bar) {
+        if (self.tb_active and rl.isMouseButtonPressed(.left) and !in_top) {
             self.tb_active = false;
             self.syncTextBox();
             tb_click_consumed = true;
@@ -397,27 +503,14 @@ pub const App = struct {
         {
             const key_inc = rl.isKeyPressed(.equal) or rl.isKeyPressed(.kp_add);
             const key_dec = rl.isKeyPressed(.minus) or rl.isKeyPressed(.kp_subtract);
-            if (key_inc or key_dec) {
-                truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
-                if (key_inc) {
-                    self.view.max_iters = @min(m.MAX_ITERS_CAP, self.view.max_iters +| self.view.max_iters);
-                } else {
-                    self.view.max_iters = @max(m.MIN_ITERS, self.view.max_iters / 2);
-                }
-                _ = try self.renderFresh(true);
-                try self.saveSnapshot();
+            if (key_inc) {
+                try self.adjustIters(true);
+            } else if (key_dec) {
+                try self.adjustIters(false);
             }
         }
         if (rl.isKeyPressed(.r)) {
-            truncateFuture(&self.history, &self.history_len, 0);
-            self.history_len = 0;
-            self.history_ptr = 0;
-            self.view.center_x = m.INITIAL_CENTER_X;
-            self.view.center_y = m.INITIAL_CENTER_Y;
-            self.view.range = m.INITIAL_RANGE;
-            self.view.max_iters = m.DEFAULT_MAX_ITERS;
-            _ = try self.renderFresh(true);
-            try self.saveSnapshot();
+            try self.resetView();
         }
         if (self.render_timed_out and rl.isKeyPressed(.space)) {
             _ = try self.renderFresh(false);
@@ -435,13 +528,13 @@ pub const App = struct {
             }
             var ch = rl.getCharPressed();
             while (ch != 0) {
-                if (ch >= 32 and ch < 127) self.tb_buf.append(@as(u8, @intCast(ch)));
+                if (ch >= ASCII_PRN_MIN and ch < ASCII_PRN_MAX + 1) self.tb_buf.append(@as(u8, @intCast(ch)));
                 ch = rl.getCharPressed();
             }
             return;
         }
 
-        if (!tb_click_consumed and !in_top_bar and !in_hud and rl.isMouseButtonPressed(.left)) {
+        if (!tb_click_consumed and !in_top and rl.isMouseButtonPressed(.left)) {
             self.drag.start_x = @floatFromInt(rl.getMouseX());
             self.drag.start_y = @floatFromInt(rl.getMouseY());
             self.drag.current_x = self.drag.start_x;
@@ -465,10 +558,14 @@ pub const App = struct {
 
             const sel_cx = (self.drag.start_x + self.drag.current_x) / 2.0;
             const sel_cy = (self.drag.start_y + self.drag.current_y) / 2.0;
+            const dpi_f = @as(f64, @floatFromInt(self.dpi_scale));
+            const phys_cx = sel_cx * dpi_f;
+            const phys_cy = (sel_cy - @as(f64, @floatFromInt(TOTAL_TOP))) * dpi_f;
+            const phys_size = size * dpi_f;
 
-            const c_center = m.screenToComplex(sel_cx, sel_cy - @as(f64, @floatFromInt(TOP_BAR)), self.view, self.image.width, self.image.height);
+            const c_center = m.screenToComplex(phys_cx, phys_cy, self.view, self.image.width, self.image.height);
             const smaller = @min(self.image.width, self.image.height);
-            const new_range = self.view.range * (size / @as(f64, @floatFromInt(smaller)));
+            const new_range = self.view.range * (phys_size / @as(f64, @floatFromInt(smaller)));
 
             truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
 
@@ -500,78 +597,118 @@ pub const App = struct {
         rl.beginDrawing();
         defer rl.endDrawing();
 
-        rl.clearBackground(rl.Color.init(240, 240, 245, 255));
-        rl.drawTexture(self.texture, 0, TOP_BAR, .white);
+        rl.clearBackground(COL_BG);
+        {
+            const src = rl.Rectangle{ .x = 0, .y = 0, .width = @floatFromInt(self.texture.width), .height = @floatFromInt(self.texture.height) };
+            const dst = rl.Rectangle{ .x = 0, .y = @floatFromInt(TOTAL_TOP), .width = @floatFromInt(self.render_w), .height = @floatFromInt(self.render_h - TOTAL_TOP) };
+            rl.drawTexturePro(self.texture, src, dst, .{ .x = 0, .y = 0 }, 0, .white);
+        }
 
         const mx = rl.getMouseX();
         const my = rl.getMouseY();
 
-        // -- Top bar --
-        rl.drawRectangle(0, 0, self.screen_w, TOP_BAR, rl.Color.init(235, 235, 240, 255));
-        rl.drawRectangle(0, TOP_BAR - 1, self.screen_w, 1, rl.Color.init(190, 190, 200, 255));
+        rl.drawRectangle(0, 0, self.render_w, LINE1_H, COL_BAR);
+        rl.drawRectangle(0, LINE1_H, self.render_w, 1, COL_SEP);
+        rl.drawRectangle(0, LINE1_H + 1, self.render_w, LINE2_H, COL_BAR);
+        rl.drawRectangle(0, TOTAL_TOP - 1, self.render_w, 1, COL_SEP);
 
-        const tb_x: i32 = TOP_PAD;
-        const tb_y: i32 = (TOP_BAR - TB_H) / 2;
+        rl.drawTextEx(self.ui_font, "drag to zoom    \xe2\x86\x90 left arrow zooms out    \xe2\x86\x92 right arrow zooms back in    press R to reset", .{ .x = @floatFromInt(HINT_PAD_X), .y = @floatFromInt(LINE1_H + HINT_PAD_Y) }, FONT_SIZE_LG, 1, COL_HINT);
+
+        const tb_y: i32 = (LINE1_H - TB_H) / 2;
         const btn_y: i32 = tb_y;
         const btn_h: i32 = TB_H;
 
-        const paste_x = self.screen_w - TOP_PAD - BTN_LG;
+        const reset_x = self.render_w - TOP_PAD - BTN_RESET;
+        const paste_x = reset_x - BTN_GAP - BTN_LG;
         const copy_x = paste_x - BTN_GAP - BTN_LG;
-        const plus_x = copy_x - BTN_GAP - BTN_SM;
-        const minus_x = plus_x - BTN_GAP - BTN_SM;
-        const tb_w = minus_x - BTN_GAP - TOP_PAD;
+        const dec_x = copy_x - BTN_GAP - BTN_ITER;
+        const inc_x = dec_x - BTN_GAP - BTN_ITER;
 
-        rl.drawRectangle(tb_x, tb_y, tb_w, TB_H, rl.Color.init(255, 255, 255, 255));
-        rl.drawRectangleLines(tb_x, tb_y, tb_w, TB_H,
-            if (self.tb_active) rl.Color.init(0, 120, 255, 255) else rl.Color.init(180, 180, 190, 255));
+        const arrow_l_x: i32 = TOP_PAD;
+        const arrow_r_x: i32 = arrow_l_x + BTN_ARROW + BTN_GAP;
+        const tb_start_x: i32 = arrow_r_x + BTN_ARROW + BTN_GAP;
 
-        var display_buf: [256]u8 = undefined;
-        const display_text = std.fmt.bufPrintZ(&display_buf, "x={d:.6} y={d:.6} range={e:.6} iters={d}", .{
+        const tb_w = inc_x - BTN_GAP - tb_start_x;
+
+        rl.drawRectangle(tb_start_x, tb_y, tb_w, TB_H, COL_TB_BG);
+        rl.drawRectangleLines(tb_start_x, tb_y, tb_w, TB_H,
+            if (self.tb_active) COL_TB_BORDER_ACTIVE else COL_TB_BORDER);
+
+        var display_buf: [CLIPBOARD_BUF]u8 = undefined;
+        const display_text = std.fmt.bufPrintZ(&display_buf, VIEW_FMT, .{
             self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters,
         }) catch unreachable;
-        rl.drawTextEx(self.ui_font, display_text, .{ .x = @floatFromInt(tb_x + 6), .y = @floatFromInt(tb_y + 4) }, 14.0, 1.0, rl.Color.init(30, 30, 40, 255));
+        rl.drawTextEx(self.ui_font, display_text, .{ .x = @floatFromInt(tb_start_x + TEXT_PAD_X), .y = @floatFromInt(tb_y + TEXT_PAD_Y) }, FONT_SIZE_LG, 1.0, COL_TEXT);
 
         if (self.tb_active) {
             const blink = @as(u32, @intFromFloat(rl.getTime() * 2.0)) & 1;
             if (blink == 0) {
-                const m2 = rl.measureTextEx(self.ui_font, display_text, 14.0, 1.0);
-                const cx = tb_x + 6 + @as(i32, @intFromFloat(m2.x));
-                rl.drawRectangle(cx, tb_y + 4, 2, 16, rl.Color.init(0, 120, 255, 255));
+                const m2 = rl.measureTextEx(self.ui_font, display_text, FONT_SIZE_LG, 1.0);
+                const cx = tb_start_x + TEXT_PAD_X + @as(i32, @intFromFloat(m2.x));
+                rl.drawRectangle(cx, tb_y + TEXT_PAD_Y, CURSOR_W, CURSOR_H, COL_TB_BORDER_ACTIVE);
             }
         }
 
         const btn_colors = struct {
             fn bg(hover: bool) rl.Color {
-                return if (hover) rl.Color.init(220, 220, 228, 255) else rl.Color.init(230, 230, 238, 255);
+                return if (hover) COL_BTN_BG_HOVER else COL_BTN_BG;
             }
             fn border() rl.Color {
-                return rl.Color.init(180, 180, 190, 255);
+                return COL_BTN_BORDER;
             }
         };
 
         {
-            const hover = mx >= plus_x and mx < plus_x + BTN_SM and my >= btn_y and my < btn_y + btn_h;
-            rl.drawRectangle(plus_x, btn_y, BTN_SM, btn_h, btn_colors.bg(hover));
-            rl.drawRectangleLines(plus_x, btn_y, BTN_SM, btn_h, btn_colors.border());
-            rl.drawText("+", plus_x + 7, btn_y + 3, 16, rl.Color.init(50, 50, 60, 255));
+            const hover = mx >= arrow_l_x and mx < arrow_l_x + BTN_ARROW and my >= btn_y and my < btn_y + btn_h;
+            rl.drawRectangle(arrow_l_x, btn_y, BTN_ARROW, btn_h, btn_colors.bg(hover));
+            rl.drawRectangleLines(arrow_l_x, btn_y, BTN_ARROW, btn_h, btn_colors.border());
+            rl.drawTextCodepoint(self.ui_font, ARROW_L_CP, .{ .x = @floatFromInt(arrow_l_x + ARROW_PAD_X), .y = @floatFromInt(btn_y + ARROW_PAD_Y) }, FONT_SIZE_ARROW, COL_BTN_TEXT);
         }
         {
-            const hover = mx >= minus_x and mx < minus_x + BTN_SM and my >= btn_y and my < btn_y + btn_h;
-            rl.drawRectangle(minus_x, btn_y, BTN_SM, btn_h, btn_colors.bg(hover));
-            rl.drawRectangleLines(minus_x, btn_y, BTN_SM, btn_h, btn_colors.border());
-            rl.drawText("-", minus_x + 8, btn_y + 2, 16, rl.Color.init(50, 50, 60, 255));
+            const hover = mx >= arrow_r_x and mx < arrow_r_x + BTN_ARROW and my >= btn_y and my < btn_y + btn_h;
+            rl.drawRectangle(arrow_r_x, btn_y, BTN_ARROW, btn_h, btn_colors.bg(hover));
+            rl.drawRectangleLines(arrow_r_x, btn_y, BTN_ARROW, btn_h, btn_colors.border());
+            rl.drawTextCodepoint(self.ui_font, ARROW_R_CP, .{ .x = @floatFromInt(arrow_r_x + ARROW_PAD_X), .y = @floatFromInt(btn_y + ARROW_PAD_Y) }, FONT_SIZE_ARROW, COL_BTN_TEXT);
+        }
+        {
+            const hover = mx >= inc_x and mx < inc_x + BTN_ITER and my >= btn_y and my < btn_y + btn_h;
+            rl.drawRectangle(inc_x, btn_y, BTN_ITER, btn_h, btn_colors.bg(hover));
+            rl.drawRectangleLines(inc_x, btn_y, BTN_ITER, btn_h, btn_colors.border());
+            const label = "inc";
+            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
+            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(inc_x)) + (@as(f32, @floatFromInt(BTN_ITER)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
+        }
+        {
+            const hover = mx >= dec_x and mx < dec_x + BTN_ITER and my >= btn_y and my < btn_y + btn_h;
+            rl.drawRectangle(dec_x, btn_y, BTN_ITER, btn_h, btn_colors.bg(hover));
+            rl.drawRectangleLines(dec_x, btn_y, BTN_ITER, btn_h, btn_colors.border());
+            const label = "dec";
+            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
+            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(dec_x)) + (@as(f32, @floatFromInt(BTN_ITER)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
         }
         {
             const hover = mx >= copy_x and mx < copy_x + BTN_LG and my >= btn_y and my < btn_y + btn_h;
             rl.drawRectangle(copy_x, btn_y, BTN_LG, btn_h, btn_colors.bg(hover));
             rl.drawRectangleLines(copy_x, btn_y, BTN_LG, btn_h, btn_colors.border());
-            rl.drawText("Copy View", copy_x + 9, btn_y + 5, 12, rl.Color.init(50, 50, 60, 255));
+            const label = "copy";
+            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
+            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(copy_x)) + (@as(f32, @floatFromInt(BTN_LG)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
         }
         {
             const hover = mx >= paste_x and mx < paste_x + BTN_LG and my >= btn_y and my < btn_y + btn_h;
             rl.drawRectangle(paste_x, btn_y, BTN_LG, btn_h, btn_colors.bg(hover));
             rl.drawRectangleLines(paste_x, btn_y, BTN_LG, btn_h, btn_colors.border());
-            rl.drawText("Paste View", paste_x + 9, btn_y + 5, 12, rl.Color.init(50, 50, 60, 255));
+            const label = "paste";
+            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
+            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(paste_x)) + (@as(f32, @floatFromInt(BTN_LG)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
+        }
+        {
+            const hover = mx >= reset_x and mx < reset_x + BTN_RESET and my >= btn_y and my < btn_y + btn_h;
+            rl.drawRectangle(reset_x, btn_y, BTN_RESET, btn_h, btn_colors.bg(hover));
+            rl.drawRectangleLines(reset_x, btn_y, BTN_RESET, btn_h, btn_colors.border());
+            const label = "reset";
+            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
+            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(reset_x)) + (@as(f32, @floatFromInt(BTN_RESET)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
         }
 
         if (self.drag.active) {
@@ -579,18 +716,15 @@ pub const App = struct {
             const y0: f32 = @floatCast(@min(self.drag.start_y, self.drag.current_y));
             const sz: f32 = @floatCast(@abs(self.drag.current_x - self.drag.start_x));
             if (sz >= MIN_SELECTION_PX) {
-                rl.drawRectangle(@intFromFloat(x0), @intFromFloat(y0), @intFromFloat(sz), @intFromFloat(sz), rl.Color.init(0, 200, 0, 50));
-                rl.drawRectangleLines(@intFromFloat(x0), @intFromFloat(y0), @intFromFloat(sz), @intFromFloat(sz), rl.Color.init(0, 200, 0, 200));
+                rl.drawRectangle(@intFromFloat(x0), @intFromFloat(y0), @intFromFloat(sz), @intFromFloat(sz), COL_DRAG_FILL);
+                rl.drawRectangleLines(@intFromFloat(x0), @intFromFloat(y0), @intFromFloat(sz), @intFromFloat(sz), COL_DRAG_BORDER);
             }
         }
 
-        const hud_top = self.screen_h - HUD_HEIGHT;
-        rl.drawRectangle(0, hud_top, self.screen_w, HUD_HEIGHT, rl.Color.init(235, 235, 240, 255));
-        rl.drawRectangle(0, hud_top, self.screen_w, 1, rl.Color.init(190, 190, 200, 255));
-        rl.drawText("Drag to zoom  |  <- undo  -> redo  |  R reset", 10, hud_top + 6, 14, rl.Color.init(60, 60, 70, 255));
-
         if (self.render_timed_out) {
-            rl.drawText("[Space]: continue", 10, hud_top + 6, 14, rl.Color.init(200, 80, 40, 255));
+            const msg = "[Space]: continue";
+            const mw = rl.measureText(msg, FONT_SIZE_TIMEOUT);
+            rl.drawText(msg, self.render_w - TOP_PAD - mw, LINE1_H + HINT_PAD_Y, FONT_SIZE_TIMEOUT, COL_TIMEOUT);
         }
     }
 };

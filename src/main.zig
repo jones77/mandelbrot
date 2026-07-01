@@ -9,6 +9,7 @@ const DEFAULT_HEIGHT: i32 = 800;
 const TARGET_FPS: i32 = 60;
 
 pub fn main(init: std.process.Init) !void {
+    rl.setConfigFlags(rl.ConfigFlags{ .window_highdpi = true });
     rl.initWindow(DEFAULT_WIDTH, DEFAULT_HEIGHT, "Mandelbrot Set");
     defer rl.closeWindow();
     rl.setTargetFPS(TARGET_FPS);
