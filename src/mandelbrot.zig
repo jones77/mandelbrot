@@ -18,6 +18,9 @@ pub const MIN_ITERS: u32 = 16;
 pub const MAX_ITERS_CAP: u32 = 65536;
 pub const AUTO_SCALE_CAP: u32 = 16384;
 pub const AUTO_SCALE_SLOPE: f64 = 0.25;
+/// When perturbation is unavailable and max_iters exceeds this, use f64 rebaseFallback
+/// instead of f32 standardPixel to avoid precision loss near the set boundary.
+pub const F32_MAX_ITERS_THRESHOLD: u32 = 2048;
 pub const INITIAL_CENTER_X: f64 = -0.5;
 pub const INITIAL_CENTER_Y: f64 = 0.0;
 pub const INITIAL_RANGE: f64 = 3.5;
@@ -32,6 +35,33 @@ test "smoothColor at boundary" {
     try testing.expect(!(c0[0] == 0 and c0[1] == 0 and c0[2] == 0));
     // mu * 4.0 = 1024 → 1024 % 1024 = 0 → wraps to start of palette
     try testing.expectEqualDeep(smoothColor(0.0, 1024), smoothColor(256.0, 1024));
+}
+
+test "smoothIteration known values" {
+    // iter=0, norm_sq=4.01 (just above escape) → mu ≈ 1.53
+    const mu0 = smoothIteration(0, 4.01);
+    try testing.expect(mu0 > 1.0 and mu0 < 2.0);
+    try testing.expectApproxEqAbs(mu0, 1.53, 0.01);
+
+    // iter=10, norm_sq=1000 → mu ≈ 9.21
+    const mu1 = smoothIteration(10, 1000.0);
+    try testing.expect(mu1 > 9.0 and mu1 < 10.0);
+    try testing.expectApproxEqAbs(mu1, 9.21, 0.01);
+
+    // iter=256, norm_sq=1e10 → mu ≈ 253.47
+    const mu2 = smoothIteration(256, 1e10);
+    try testing.expect(mu2 > 253.0 and mu2 < 254.0);
+
+    // Monotonicity: more iterations → larger mu at same norm_sq
+    try testing.expect(mu1 > mu0);
+    try testing.expect(mu2 > mu1);
+}
+
+test "smoothColor with NaN or inf returns black" {
+    buildPalette();
+    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(std.math.nan(f64), 1024));
+    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(std.math.inf(f64), 1024));
+    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(-std.math.inf(f64), 1024));
 }
 
 test "computeReference at high max_iters" {
@@ -95,7 +125,7 @@ pub const Coord = struct {
 
 pub const OrbitPoint = struct { zx: f32, zy: f32 };
 
-pub const RefOrbit = struct { zx: f64, zy: f64, dz_re: f64, dz_im: f64 };
+pub const RefOrbit = struct { zx: f64, zy: f64 };
 
 pub const ViewState = struct {
     center_x: f64,
@@ -159,7 +189,7 @@ pub fn hslToRgb(h: f32, s: f32, l: f32) [4]u8 {
 }
 
 pub fn smoothColor(mu: f64, max_iters: u32) [4]u8 {
-    if (mu >= @as(f64, @floatFromInt(max_iters))) return .{ 0, 0, 0, 255 };
+    if (!std.math.isFinite(mu) or mu >= @as(f64, @floatFromInt(max_iters))) return .{ 0, 0, 0, 255 };
     const raw = mu * PALETTE_DENSITY;
     const idx = @as(usize, @intFromFloat(@mod(raw, @as(f64, @floatFromInt(PALETTE_SIZE)))));
     const frac = raw - @floor(raw);
@@ -181,19 +211,13 @@ pub fn computeReference(cx: f64, cy: f64, max_iters: u32, allocator: std.mem.All
     const orbit = try allocator.alloc(RefOrbit, max_iters);
     var zx: f64 = cx;
     var zy: f64 = cy;
-    var der_re: f64 = 1.0;
-    var der_im: f64 = 0.0;
     var ref_interior: bool = true;
 
     for (0..max_iters) |i| {
-        orbit[i] = .{ .zx = zx, .zy = zy, .dz_re = der_re, .dz_im = der_im };
+        orbit[i] = .{ .zx = zx, .zy = zy };
         const zx2 = zx * zx;
         const zy2 = zy * zy;
         if (zx2 + zy2 > ESCAPE_RADIUS_SQ) ref_interior = false;
-        const nder_re = 2.0 * (zx * der_re - zy * der_im) + 1.0;
-        const nder_im = 2.0 * (zx * der_im + zy * der_re);
-        der_re = nder_re;
-        der_im = nder_im;
         zy = 2.0 * zx * zy + cy;
         zx = zx2 - zy2 + cx;
     }
@@ -214,7 +238,8 @@ pub inline fn smoothIteration(iter: u32, norm_sq: f64) f64 {
     return @as(f64, @floatFromInt(iter)) + 1.0 - @log(0.5 * @log(norm_sq)) / @log(2.0);
 }
 
-/// Per-pixel perturbation iteration.
+/// Simplified perturbation (no glitch detection, rebasing, or f64 escape checks).
+/// Used only by tests. The production renderer uses an inline loop in renderer.zig.
 /// Returns smooth iteration count `mu`, or `max_iters` as f32 for interior.
 pub fn perturbPixel(
     dcx: f32,
@@ -661,6 +686,20 @@ test "computeReference far exterior escapes immediately" {
     try testing.expect(result[1].zx * result[1].zx + result[1].zy * result[1].zy > 4.0);
 }
 
+test "computeReference max_iters=0 interior returns null" {
+    const result = try computeReference(-0.5, 0.0, 0, std.testing.allocator);
+    try testing.expect(result == null);
+}
+
+test "computeReference max_iters=1 exterior escapes at start" {
+    const result = (try computeReference(2.5, 0.0, 1, std.testing.allocator)) orelse {
+        @panic("expected non-null orbit");
+    };
+    defer std.testing.allocator.free(result);
+    try testing.expectEqual(@as(usize, 1), result.len);
+    try testing.expect(result[0].zx * result[0].zx + result[0].zy * result[0].zy > 4.0);
+}
+
 test "zoom math round-trip" {
     const screen_w: i32 = 900;
     const screen_h: i32 = 800;
@@ -788,44 +827,22 @@ test "perturbation interior point classified interior" {
     try testing.expect(mu_s >= @as(f32, @floatFromInt(max_iters)));
 }
 
-test "perturbation computeReference derivative values are finite" {
-    const max_iters: u32 = 256;
-    const orbit = (try computeReference(0.5, 0.3, max_iters, std.testing.allocator)) orelse {
+test "perturbPixel with large offset escapes immediately" {
+    const ref_cx: f32 = 0.3;
+    const ref_cy: f32 = 0.0;
+    const dcx: f32 = 2.0;
+    const dcy: f32 = 0.0;
+    const max_iters: u32 = 128;
+    const orbit = (try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator)) orelse {
         @panic("expected exterior reference");
     };
     defer std.testing.allocator.free(orbit);
 
-    var escape_idx: ?usize = null;
-    for (orbit, 0..) |o, i| {
-        if (o.zx * o.zx + o.zy * o.zy > 4.0) { escape_idx = i; break; }
-    }
-    try testing.expect(escape_idx != null);
-    const ei = escape_idx.?;
-    // Derivative grows unbounded after escape — only check pre-escape entries
-    for (orbit[0..ei]) |o| {
-        try testing.expect(std.math.isFinite(o.zx));
-        try testing.expect(std.math.isFinite(o.zy));
-        try testing.expect(std.math.isFinite(o.dz_re));
-        try testing.expect(std.math.isFinite(o.dz_im));
-    }
-}
-
-test "perturbation computeReference derivative grows after escape" {
-    const max_iters: u32 = 256;
-    const orbit = (try computeReference(1.0, 0.0, max_iters, std.testing.allocator)) orelse {
-        @panic("expected exterior reference");
-    };
-    defer std.testing.allocator.free(orbit);
-
-    var escape_idx: ?usize = null;
-    for (orbit, 0..) |o, i| {
-        if (o.zx * o.zx + o.zy * o.zy > 4.0) { escape_idx = i; break; }
-    }
-    try testing.expect(escape_idx != null);
-    const ei = escape_idx.?;
-
-    // Just after escape, derivative should be large (|d| > 1)
-    try testing.expect(orbit[ei].dz_re * orbit[ei].dz_re + orbit[ei].dz_im * orbit[ei].dz_im > 1.0);
+    const mu = perturbPixel(dcx, dcy, orbit, max_iters);
+    try testing.expect(std.math.isFinite(mu));
+    try testing.expect(mu < @as(f32, @floatFromInt(max_iters)));
+    // At iter=0: sumx = 0.3 + 2.0 = 2.3, |z|² = 5.29 > 4, mu ≈ 1.26
+    try testing.expect(mu > 1.0 and mu < 2.0);
 }
 
 test "continueStandard from start matches standardPixel" {
@@ -884,6 +901,17 @@ test "continueStandard interior via periodicity matches standardPixel" {
     try testing.expect(mu_s >= @as(f32, @floatFromInt(max_iters)));
 }
 
+test "standardPixel epsilon=0 still detects escape" {
+    // With interior_eps_sq=0, derivative detection never fires.
+    // With periodicity_eps_sq=0, periodicity detection never fires.
+    // Must still escape via norm_sq check.
+    const mu0 = standardPixel(0.5, 0.3, 64, 0.0, 0.0);
+    try testing.expect(mu0 < @as(f32, @floatFromInt(64)));
+
+    const mu1 = standardPixel(0.0, 0.0, 256, 0.0, 0.0);
+    try testing.expect(mu1 >= @as(f32, @floatFromInt(256)));
+}
+
 test "rebaseFallback from start matches standardPixel" {
     const cx: f64 = 0.5;
     const cy: f64 = 0.3;
@@ -939,6 +967,24 @@ test "rebaseFallback interior at timeout regression coordinate" {
     // The simplified f64 loop must agree.
     const mu_rb = rebaseFallback(-1.996378, 0.000002, -1.996378, 0.000002, 0, 512);
     try testing.expect(mu_rb >= @as(f32, @floatFromInt(512)));
+}
+
+test "rebaseFallback start_iter equals max_iters returns max_iters" {
+    const mu = rebaseFallback(0.0, 0.0, 0.0, 0.0, 64, 64);
+    try testing.expect(mu >= @as(f32, @floatFromInt(64)));
+}
+
+test "rebaseFallback start_iter near max_iters interior returns max_iters" {
+    // start_iter = max_iters - 1, origin point → one more iteration, no escape
+    const mu = rebaseFallback(0.0, 0.0, 0.0, 0.0, 63, 64);
+    try testing.expect(mu >= @as(f32, @floatFromInt(64)));
+}
+
+test "rebaseFallback start_iter near max_iters escapes immediately" {
+    // start_iter = max_iters - 1, z already past escape radius → escapes
+    const mu = rebaseFallback(3.0, 0.0, 2.5, 0.0, 63, 64);
+    try testing.expect(mu < @as(f32, @floatFromInt(64)));
+    try testing.expect(mu >= 63.0 and mu < 64.0);
 }
 
 test "rebaseFallback matches standardPixel at moderate zoom coordinates" {

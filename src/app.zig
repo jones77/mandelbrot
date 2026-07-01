@@ -97,7 +97,6 @@ fn truncateFuture(history: []HistoryEntry, history_len: *usize, index: usize) vo
     while (index < history_len.*) {
         history_len.* -= 1;
         std.heap.page_allocator.free(history[history_len.*].pixels);
-        history[history_len.*].pixels = &[_]u8{};
     }
 }
 

@@ -35,9 +35,11 @@ fn renderStrip(ctx: *RenderStrip) void {
     const w = cfg.w;
     const h = cfg.h;
     const max_iters = cfg.max_iters;
+    if (w < 2 or h < 2) return;
 
     const pixel_step = cfg.range_x / @as(f64, @floatFromInt(w));
-    const use_f64 = cfg.render_method == .f64 or (cfg.render_method == .auto and pixel_step < 1.0e-7);
+    // When perturbation is unavailable, use f64 rebaseFallback instead of f32 standardPixel.
+    const render_fallback_f64 = cfg.render_method == .f64 or (cfg.render_method == .auto and pixel_step < 1.0e-7);
 
     var py = ctx.start_row;
     while (py < ctx.end_row) : (py += 1) {
@@ -67,6 +69,7 @@ fn renderStrip(ctx: *RenderStrip) void {
             const max_f: f32 = @as(f32, @floatFromInt(max_iters));
             const pix_idx = (py * w + px) * 4;
 
+            // Path selection: perturbation (if ref available) > f64 (if deep zoom or high iters) > f32 standard.
             const mu: f32 = if (cfg.ref_orbit) |orbit| blk: {
                 const dcx: f32 = @floatCast(cx_f64 - orbit[0].zx);
                 const dcy: f32 = @floatCast(cy_f64 - orbit[0].zy);
@@ -138,7 +141,7 @@ fn renderStrip(ctx: *RenderStrip) void {
                     dy = two_zd_im + dsq_im + dcy;
                 }
                 break :blk result;
-            } else if (use_f64 or max_iters > 2048)
+            } else if (render_fallback_f64 or max_iters > m.F32_MAX_ITERS_THRESHOLD)
                 m.rebaseFallback(cx_f64, cy_f64, cx_f64, cy_f64, 0, max_iters)
             else m.standardPixel(cx, cy, max_iters, cfg.interior_eps_sq, cfg.periodicity_eps_sq);
 
