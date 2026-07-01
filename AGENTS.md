@@ -23,20 +23,3 @@ zig build run      # run app
 zig build test     # full suite
 zig build unit     # 37 pure-math tests, no raylib, prints output
 ```
-
-## Known bugs and fixes
-
-### f32 overflow in perturbation
-Z overflows f32 ~7 iters post-escape. Escape check ran before Z_norm_sq
-overflow check, sending f32-inf into rebaseFallback via @as(f64, Zx).
-Produced -inf mu → NaN in smoothColor.
-**Fix:** Z_norm_sq check before escape check; use ref.zx (f64) directly.
-
-### f32 precision in standardPixel
-f32 loop degrades over thousands of iterations, rounding |z|² below 4.0
-for exterior pixels → classified interior (black circle).
-**Fix:** Use rebaseFallback (f64) when max_iters > 2048 and ref is interior.
-
-### Perturbation path order
-Perturbation first (if ref_orbit), then f64 fallback, then standardPixel.
-δ computed from cx_f64 - orbit[0].zx (f64) not cx - orbit[0].zx (f32→f64).

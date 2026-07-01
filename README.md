@@ -196,24 +196,6 @@ You can then remove the `dependencies` section from `build.zig.zon`.
 
 ---
 
-## Project structure
-
-```
-mandelbrot/
-├── README.md              # this file
-├── AGENTS.md              # agent session context
-├── build.zig              # zig build script
-├── build.zig.zon          # package manifest
-├── cheritat-algorithms.md # condensed algorithm reference
-└── src/
-    ├── main.zig           # entry point
-    ├── app.zig            # UI, history, clipboard
-    ├── renderer.zig       # multi-threaded rendering
-    └── mandelbrot.zig     # pure math (palette, iteration, perturbation)
-```
-
----
-
 ## Zig learning resources
 
 - [ziglang.org/learn](https://ziglang.org/learn/) — official guide
