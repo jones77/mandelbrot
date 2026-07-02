@@ -11,6 +11,25 @@ An interactive Mandelbrot set explorer written in [Zig](https://ziglang.org/).
 - **HUD** — shows current complex-plane coordinates, visible range, and iteration limit
 - **Cross-platform** — runs on macOS, Linux, and Windows 11 via raylib
 
+## Download
+
+Pre-built binaries for macOS are available on the
+[Releases](https://github.com/jones77/mandelbrot/releases) page.
+
+1. Download `mandelbrot-macos-arm64.tar.gz` (Apple Silicon)
+   or `mandelbrot-macos-x86_64.tar.gz` (Intel).
+2. Extract and run:
+   ```bash
+   tar -xzf mandelbrot-macos-arm64.tar.gz
+   ./mandelbrot
+   ```
+3. macOS may show a security warning on first run.
+   Right-click the binary in Finder and select **Open**,
+   or clear the quarantine flag:
+   ```bash
+   xattr -d com.apple.quarantine mandelbrot
+   ```
+
 ---
 
 ## Quick start
@@ -206,6 +225,27 @@ You can then remove the `dependencies` section from `build.zig.zon`.
 - [Zig community](https://ziglang.org/community/) — Discord / IRC / forums
 
 ---
+
+## Creating a release
+
+> This section is for maintainers.
+> See [`AGENTS.md`](AGENTS.md#release-process) for the agent-executable workflow.
+
+1. Update the version in `build.zig.zon`.
+2. Build the release binary:
+   ```bash
+   zig build release
+   ```
+3. Archive it:
+   ```bash
+   tar -czf mandelbrot-macos-$(uname -m).tar.gz -C zig-out/bin mandelbrot
+   ```
+4. Create the GitHub release:
+   ```bash
+   gh release create v<VERSION> mandelbrot-macos-$(uname -m).tar.gz \
+     --title "v<VERSION>"
+   ```
+5. Bump the version in `build.zig.zon` to the next dev version and commit.
 
 ## License
 

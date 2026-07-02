@@ -1,6 +1,6 @@
 .{
     .name = .mandelbrot,
-    .version = "0.1.0",
+    .version = "0.0.1",
     .dependencies = .{
         .raylib_zig = .{
             .url = "git+https://github.com/raylib-zig/raylib-zig?ref=v5.6-dev#4b6a05cd102d51f00523dd5c5e18e628df359d20",

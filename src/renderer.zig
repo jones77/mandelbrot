@@ -1,6 +1,8 @@
 const std = @import("std");
 const m = @import("mandelbrot.zig");
 
+const PIXEL_CHANNELS: u32 = 4;
+
 const MAX_RENDER_THREADS: usize = 8;
 const MIN_ROWS_PER_THREAD: usize = 32;
 
@@ -21,6 +23,7 @@ const RenderConfig = struct {
     periodicity_eps_sq: f32,
     glitch_eps_sq: f32,
     ref_orbit: ?[]const m.RefOrbit,
+    rows_completed: ?[]bool,
 };
 
 const RenderStrip = struct {
@@ -43,6 +46,9 @@ fn renderStrip(ctx: *RenderStrip) void {
 
     var py = ctx.start_row;
     while (py < ctx.end_row) : (py += 1) {
+        if (cfg.rows_completed) |rc| {
+            if (rc[py]) continue;
+        }
         if (cfg.deadline_s > 0 and cfg.get_time_fn() >= cfg.deadline_s) {
             ctx.timed_out = true;
             return;
@@ -67,7 +73,7 @@ fn renderStrip(ctx: *RenderStrip) void {
             }
 
             const max_f: f32 = @as(f32, @floatFromInt(max_iters));
-            const pix_idx = (py * w + px) * 4;
+            const pix_idx = (py * w + px) * PIXEL_CHANNELS;
 
             // Path selection: perturbation (if ref available) > f64 (if deep zoom or high iters) > f32 standard.
             const mu: f32 = if (cfg.ref_orbit) |orbit| blk: {
@@ -144,6 +150,7 @@ fn renderStrip(ctx: *RenderStrip) void {
             cfg.pixels[pix_idx + 2] = color[2];
             cfg.pixels[pix_idx + 3] = color[3];
         }
+        if (cfg.rows_completed) |rc| rc[py] = true;
     }
 }
 
@@ -170,6 +177,7 @@ pub fn renderMandelbrot(
     clear: bool,
     timeout_s: f64,
     get_time_fn: *const fn () f64,
+    rows_completed: ?[]bool,
 ) !bool {
     const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
     const range_x = view.range;
@@ -218,6 +226,7 @@ pub fn renderMandelbrot(
         .periodicity_eps_sq = periodicity_eps_sq,
         .glitch_eps_sq = m.GLITCH_EPSILON,
         .ref_orbit = ref_orbit,
+        .rows_completed = rows_completed,
     };
 
     var strips: [MAX_RENDER_THREADS]RenderStrip = undefined;

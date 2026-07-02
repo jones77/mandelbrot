@@ -3,3 +3,4 @@ zig-pkg/
 zig-out/
 Session.vim
 *.sw[op]
+*.tar.gz

@@ -1,6 +1,8 @@
 const std = @import("std");
 const rl = @import("raylib");
 const app = @import("app.zig");
+
+const PIXEL_CHANNELS: u32 = 4;
 const m = @import("mandelbrot.zig");
 const renderer = @import("renderer.zig");
 
@@ -66,8 +68,8 @@ test "default view renders with colored exterior pixels" {
         .max_iters = m.DEFAULT_MAX_ITERS,
     };
 
-    const pixels = @as([*]u8, @ptrCast(img.data))[0 .. @as(usize, @intCast(w * h * 4))];
-    const timed_out = try renderer.renderMandelbrot(pixels, @intCast(w), @intCast(h), view, true, 0, rl.getTime);
+    const pixels = @as([*]u8, @ptrCast(img.data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+    const timed_out = try renderer.renderMandelbrot(pixels, @intCast(w), @intCast(h), view, true, 0, rl.getTime, null);
     try testing.expect(!timed_out);
 
     const center_idx: usize = 16 * @as(usize, @intCast(w)) + 16;

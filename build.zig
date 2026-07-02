@@ -46,4 +46,24 @@ pub fn build(b: *std.Build) void {
     });
     const math_step = b.step("unit", "Run pure-math tests (prints output)");
     math_step.dependOn(&math_test.step);
+
+    // ---- Release build (always ReleaseSafe, for macOS distribution) ----
+    const release_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+    });
+    const raylib_dep_rel = b.dependency("raylib_zig", .{
+        .target = target,
+        .optimize = .ReleaseSafe,
+    });
+    release_mod.addImport("raylib", raylib_dep_rel.module("raylib"));
+    const release_exe = b.addExecutable(.{
+        .name = "mandelbrot",
+        .root_module = release_mod,
+    });
+    release_mod.linkLibrary(raylib_dep_rel.artifact("raylib"));
+    const release_install = b.addInstallArtifact(release_exe, .{});
+    const release_step = b.step("release", "Build optimized release binary (macOS)");
+    release_step.dependOn(&release_install.step);
 }

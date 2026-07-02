@@ -4,6 +4,8 @@ pub const PALETTE_SIZE: usize = 1024;
 pub const PALETTE_DENSITY: f64 = 4.0;
 pub const INTERIOR_BASE_EPSILON_SQ: f32 = 1e-6;
 pub const PERIODICITY_BASE_EPSILON_SQ: f32 = 1e-6;
+pub const CARDIOID_DIST_SQ: f64 = 0.25;
+pub const BULB_RADIUS_SQ: f64 = 0.0625;
 pub const CARDIOID_Y_MAX: f64 = 3.0 * @sqrt(3.0) / 8.0;
 pub const ESCAPE_RADIUS_SQ: f64 = 4.0;
 
@@ -488,6 +490,16 @@ pub fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64)
     return .{
         .x = start_x + std.math.copysign(size, raw_dx),
         .y = start_y + std.math.copysign(size, raw_dy),
+    };
+}
+
+pub fn lerpViewState(a: ViewState, b: ViewState, t: f64) ViewState {
+    return ViewState{
+        .center_x = a.center_x + (b.center_x - a.center_x) * t,
+        .center_y = a.center_y + (b.center_y - a.center_y) * t,
+        .range = a.range + (b.range - a.range) * t,
+        .max_iters = if (t < 0.5) a.max_iters else b.max_iters,
+        .render_method = if (t < 0.5) a.render_method else b.render_method,
     };
 }
 
