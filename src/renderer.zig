@@ -42,7 +42,7 @@ fn renderStrip(ctx: *RenderStrip) void {
 
     const pixel_step = cfg.range_x / @as(f64, @floatFromInt(w));
     // When perturbation is unavailable, use f64 rebaseFallback instead of f32 standardPixel.
-    const render_fallback_f64 = cfg.render_method == .f64 or (cfg.render_method == .auto and pixel_step < 1.0e-7);
+    const render_fallback_f64 = cfg.render_method == .f64 or (cfg.render_method == .auto and pixel_step < m.PIXEL_STEP_F64_THRESHOLD);
 
     var py = ctx.start_row;
     while (py < ctx.end_row) : (py += 1) {

@@ -23,6 +23,9 @@ pub const AUTO_SCALE_SLOPE: f64 = 0.25;
 /// When perturbation is unavailable and max_iters exceeds this, use f64 rebaseFallback
 /// instead of f32 standardPixel to avoid precision loss near the set boundary.
 pub const F32_MAX_ITERS_THRESHOLD: u32 = 2048;
+/// When the pixel step (range_x / w) is below this threshold, use f64 rebaseFallback
+/// instead of f32 standardPixel to avoid precision loss at deep zoom levels.
+pub const PIXEL_STEP_F64_THRESHOLD: f64 = 1.0e-7;
 pub const INITIAL_CENTER_X: f64 = -0.5;
 pub const INITIAL_CENTER_Y: f64 = 0.0;
 pub const INITIAL_RANGE: f64 = 3.5;
