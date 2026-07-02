@@ -32,3 +32,21 @@ pub fn logEvent(comptime scope: anytype, comptime fmt: []const u8, args: anytype
     std.debug.print(fmt, args);
     std.debug.print("\n", .{});
 }
+
+const testing = std.testing;
+
+test "isoNow format" {
+    var buf: [24]u8 = undefined;
+    const ts = isoNow(&buf);
+    try testing.expectEqual(@as(usize, 24), ts.len);
+    // ISO 8601 basic format: YYYY-MM-DDTHH:MM:SS.mmmZ (24 chars)
+    try testing.expectEqual(@as(u8, 'T'), ts[10]);
+    try testing.expectEqual(@as(u8, 'Z'), ts[23]);
+    try testing.expectEqual(@as(u8, '-'), ts[4]);
+    try testing.expectEqual(@as(u8, '-'), ts[7]);
+    try testing.expectEqual(@as(u8, ':'), ts[13]);
+    try testing.expectEqual(@as(u8, ':'), ts[16]);
+    try testing.expectEqual(@as(u8, '.'), ts[19]);
+}
+
+

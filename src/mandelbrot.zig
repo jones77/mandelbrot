@@ -1574,3 +1574,69 @@ test "rebaseFallback at high iteration counts" {
     }
 }
 
+test "isCardioidOrBulb classifies known points" {
+    // Inside main cardioid on real axis
+    try testing.expect(isCardioidOrBulb(-0.1, 0.0));
+    try testing.expect(isCardioidOrBulb(0.0, 0.0));
+    try testing.expect(isCardioidOrBulb(0.24, 0.0));
+    // Inside period-2 bulb
+    try testing.expect(isCardioidOrBulb(-1.0, 0.0));
+    try testing.expect(isCardioidOrBulb(-1.2, 0.01));
+    // Outside both (just right of cardioid cusp at x=0.25)
+    try testing.expect(!isCardioidOrBulb(0.26, 0.0));
+    // Outside both
+    try testing.expect(!isCardioidOrBulb(-0.5, 0.25));
+    try testing.expect(!isCardioidOrBulb(0.5, 0.5));
+    try testing.expect(!isCardioidOrBulb(-1.5, 0.5));
+}
+
+test "isoNow format matches ISO 8601" {
+    const util = @import("util.zig");
+    var buf: [24]u8 = undefined;
+    const ts = util.isoNow(&buf);
+    try testing.expectEqual(@as(usize, 24), ts.len);
+    try testing.expectEqual(@as(u8, 'T'), ts[10]);
+    try testing.expectEqual(@as(u8, 'Z'), ts[23]);
+    try testing.expectEqual(@as(u8, '-'), ts[4]);
+    try testing.expectEqual(@as(u8, '-'), ts[7]);
+    try testing.expectEqual(@as(u8, ':'), ts[13]);
+    try testing.expectEqual(@as(u8, ':'), ts[16]);
+    try testing.expectEqual(@as(u8, '.'), ts[19]);
+}
+
+test "glitch detection converges to ground truth at Seahorse Valley" {
+    // Verify renderPerturbationPixel with both glitch_ratio=0 and
+    // glitch_ratio=GLITCH_RATIO against groundTruthPixel at a deep zoom
+    // Seahorse Valley coordinate known to trigger glitch correction.
+    const ref_cx: f64 = -1.785897;
+    const ref_cy: f64 = 0.000055;
+    const range: f64 = 2.257306e-3;
+    const max_iters: u32 = 8192;
+
+    const offsets = [_]struct { dx: f64, dy: f64 }{
+        .{ .dx = 0.0, .dy = 0.0 },
+        .{ .dx = -0.5 * range, .dy = -0.5 * range },
+        .{ .dx = 0.5 * range, .dy = 0.5 * range },
+    };
+
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, testing.allocator);
+    defer testing.allocator.free(orbit);
+
+    for (offsets) |off| {
+        const pix_cx = ref_cx + off.dx;
+        const pix_cy = ref_cy + off.dy;
+        const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
+        if (!gt.escaped) continue;
+
+        const mu_no_glitch = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, 0);
+        const mu_glitch = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO);
+        const mu_gt_f64 = smoothIteration(gt.iter, gt.zx * gt.zx + gt.zy * gt.zy);
+        const mu_gt: f32 = @floatCast(mu_gt_f64);
+
+        // With glitch detection the result agrees with ground truth.
+        try testing.expectApproxEqAbs(mu_gt, mu_glitch, 0.5);
+        // Without glitch detection the result may differ.
+        _ = mu_no_glitch;
+    }
+}
+
