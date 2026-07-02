@@ -488,6 +488,15 @@ pub fn nextPowerOf2(n: u32) u32 {
     return x + 1;
 }
 
+/// Returns true when the renderer should use f64 rebaseFallback instead of
+/// f32 standardPixel.  .f64 mode forces f64; .auto uses f64 when the pixel
+/// step is below the precision threshold or when max_iters exceeds f32 range.
+pub fn shouldUseF64Fallback(render_method: RenderMethod, pixel_step: f64, max_iters: u32) bool {
+    return render_method == .f64 or
+        (render_method == .auto and pixel_step < PIXEL_STEP_F64_THRESHOLD) or
+        max_iters > F32_MAX_ITERS_THRESHOLD;
+}
+
 /// Computes the auto-scaled iteration count based on zoom depth.
 /// At INITIAL_RANGE returns DEFAULT_MAX_ITERS (2048). At deeper zoom,
 /// scales iter count logarithmically up to AUTO_SCALE_CAP (16384).
@@ -510,10 +519,12 @@ pub fn screenToComplex(sx: f64, sy: f64, view: ViewState, img_w: i32, img_h: i32
     const range_y = view.range / aspect;
     const left = view.center_x - range_x / 2.0;
     const top = view.center_y - range_y / 2.0;
+    const div_w: f64 = @floatFromInt(img_w);
+    const div_h: f64 = @floatFromInt(img_h);
 
     return .{
-        .x = left + (sx / @as(f64, @floatFromInt(img_w))) * range_x,
-        .y = top + (sy / @as(f64, @floatFromInt(img_h))) * range_y,
+        .x = left + (sx / div_w) * range_x,
+        .y = top + (sy / div_h) * range_y,
     };
 }
 
@@ -1628,15 +1639,26 @@ test "glitch detection converges to ground truth at Seahorse Valley" {
         const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
         if (!gt.escaped) continue;
 
-        const mu_no_glitch = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, 0);
+        _ = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, 0);
         const mu_glitch = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO);
         const mu_gt_f64 = smoothIteration(gt.iter, gt.zx * gt.zx + gt.zy * gt.zy);
         const mu_gt: f32 = @floatCast(mu_gt_f64);
 
         // With glitch detection the result agrees with ground truth.
         try testing.expectApproxEqAbs(mu_gt, mu_glitch, 0.5);
-        // Without glitch detection the result may differ.
-        _ = mu_no_glitch;
     }
+}
+
+test "shouldUseF64Fallback path selection" {
+    // .f64 always falls back
+    try testing.expect(shouldUseF64Fallback(.f64, 1.0, 100));
+    // .auto with large pixel step and low iters → f32
+    try testing.expect(!shouldUseF64Fallback(.auto, PIXEL_STEP_F64_THRESHOLD * 10, 256));
+    // .auto with small pixel step → f64
+    try testing.expect(shouldUseF64Fallback(.auto, PIXEL_STEP_F64_THRESHOLD / 10, 256));
+    // .auto with high iteration count → f64
+    try testing.expect(shouldUseF64Fallback(.auto, 1.0, F32_MAX_ITERS_THRESHOLD + 100));
+    // .perturbation never falls back (uses perturbation path instead)
+    try testing.expect(!shouldUseF64Fallback(.perturbation, 0.0, 100));
 }
 

@@ -44,7 +44,7 @@ fn renderStrip(ctx: *RenderStrip) void {
 
     const pixel_step = cfg.range_x / @as(f64, @floatFromInt(w));
     // When perturbation is unavailable, use f64 rebaseFallback instead of f32 standardPixel.
-    const render_fallback_f64 = cfg.render_method == .f64 or (cfg.render_method == .auto and pixel_step < m.PIXEL_STEP_F64_THRESHOLD);
+    const render_fallback_f64 = m.shouldUseF64Fallback(cfg.render_method, pixel_step, max_iters);
 
     var py = ctx.start_row;
     while (py < ctx.end_row) : (py += 1) {
@@ -76,7 +76,7 @@ fn renderStrip(ctx: *RenderStrip) void {
                 const dcx = @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w)) - 0.5 * cfg.range_x + cfg.offset_x;
                 const dcy = @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h)) - 0.5 * cfg.range_y + cfg.offset_y;
                 break :blk m.renderPerturbationPixel(dcx, dcy, orbit, max_iters, cfg.glitch_ratio);
-            } else if (render_fallback_f64 or max_iters > m.F32_MAX_ITERS_THRESHOLD)
+            } else if (render_fallback_f64)
                 m.rebaseFallback(cx_f64, cy_f64, cx_f64, cy_f64, 0, max_iters)
             else m.standardPixel(cx, cy, max_iters, cfg.interior_eps_sq, cfg.periodicity_eps_sq);
 
