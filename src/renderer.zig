@@ -64,13 +64,7 @@ fn renderStrip(ctx: *RenderStrip) void {
             const cx: f32 = @floatCast(cx_f64);
 
             // Cardioid & period-2 bulb pre-check (always interior, skip iteration).
-            // Cardioid: |c - e^(iθ)/2 + e^(2iθ)/4| ≤ 1/4  →  q(q - 1/4) ≤ y²/4.
-            // Period-2 bulb: |c + 1| ≤ 1/4.
-            if (!cfg.skip_periodicity) {
-                const q = (cx - 0.25) * (cx - 0.25) + cy2;
-                if (q * (q + (cx - 0.25)) <= 0.25 * cy2) continue;
-                if ((cx + 1.0) * (cx + 1.0) + cy2 <= 0.0625) continue;
-            }
+            if (!cfg.skip_periodicity and m.isCardioidOrBulb(cx, cy2)) continue;
 
             const max_f: f32 = @as(f32, @floatFromInt(max_iters));
             const pix_idx = (py * w + px) * PIXEL_CHANNELS;

@@ -449,6 +449,16 @@ pub const WellKnown = struct {
     };
 };
 
+/// Returns true if (cx, cy) lies inside the main cardioid or the period-2 bulb,
+/// where the Mandelbrot recurrence is guaranteed not to escape.
+/// `cy2` is cy * cy (precomputed by the caller).
+pub fn isCardioidOrBulb(cx: f32, cy2: f32) bool {
+    const q = (cx - 0.25) * (cx - 0.25) + cy2;
+    if (q * (q + (cx - 0.25)) <= 0.25 * cy2) return true;
+    if ((cx + 1.0) * (cx + 1.0) + cy2 <= 0.0625) return true;
+    return false;
+}
+
 pub fn clearToOpaqueBlack(pixels: []u8) void {
     @memset(pixels, 0);
     var a: usize = 3;
