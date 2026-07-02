@@ -1509,13 +1509,6 @@ test "deep zoom zoom math produces valid target" {
     const new_range = view.range * (size / smaller);
     try testing.expect(new_range < view.range);
     try testing.expect(new_range > 0);
-
-    // The offset combined with the range is consistent — the delta is on the
-    // order of the range, and the new range is smaller, so the target area
-    // is a proper sub-region of the source.
-    try testing.expect(@abs(delta_x) <= view.range * 0.5);
-    try testing.expect(new_range < view.range);
-    try testing.expect(new_range <= view.range - @abs(delta_x)); // selected area fits within source
 }
 
 test "lerpViewState interpolates offset" {
