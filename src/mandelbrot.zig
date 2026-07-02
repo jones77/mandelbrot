@@ -1585,7 +1585,7 @@ test "isCardioidOrBulb classifies known points" {
     // Outside both (just right of cardioid cusp at x=0.25)
     try testing.expect(!isCardioidOrBulb(0.26, 0.0));
     // Outside both
-    try testing.expect(!isCardioidOrBulb(-0.5, 0.25));
+    try testing.expect(!isCardioidOrBulb(-0.75, 0.25));
     try testing.expect(!isCardioidOrBulb(0.5, 0.5));
     try testing.expect(!isCardioidOrBulb(-1.5, 0.5));
 }
