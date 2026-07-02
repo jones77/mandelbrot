@@ -26,9 +26,9 @@ pub const F32_MAX_ITERS_THRESHOLD: u32 = 2048;
 /// When the pixel step (range_x / w) is below this threshold, use f64 rebaseFallback
 /// instead of f32 standardPixel to avoid precision loss at deep zoom levels.
 pub const PIXEL_STEP_F64_THRESHOLD: f64 = 1.0e-7;
-pub const INITIAL_CENTER_X: f64 = -0.5;
+pub const INITIAL_CENTER_X: f64 = -0.75;
 pub const INITIAL_CENTER_Y: f64 = 0.0;
-pub const INITIAL_RANGE: f64 = 3.5;
+pub const INITIAL_RANGE: f64 = 2.5;
 
 /// Selects which inner-loop algorithm the renderer uses.
 /// `auto` picks based on zoom depth (current default).
