@@ -927,6 +927,89 @@ test "perturbPixel with large offset escapes immediately" {
     try testing.expect(mu > 1.0 and mu < 2.0);
 }
 
+test "renderPerturbationPixel escapes at reference point" {
+    const ref_cx: f64 = 0.3;
+    const ref_cy: f64 = 0.0;
+    const max_iters: u32 = 128;
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
+
+    const mu = renderPerturbationPixel(0.0, 0.0, orbit, max_iters, GLITCH_RATIO);
+    try testing.expect(std.math.isFinite(mu));
+    try testing.expect(mu < @as(f32, @floatFromInt(max_iters)));
+}
+
+test "renderPerturbationPixel interior point returns max_iters" {
+    const ref_cx: f64 = 0.3;
+    const ref_cy: f64 = 0.0;
+    const max_iters: u32 = 128;
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
+
+    const mu = renderPerturbationPixel(-0.06, 0.0, orbit, max_iters, GLITCH_RATIO);
+    try testing.expect(std.math.isFinite(mu));
+    try testing.expect(mu >= @as(f32, @floatFromInt(max_iters)));
+}
+
+test "renderPerturbationPixel matches perturbPixel with glitch_ratio=0" {
+    const ref_cx: f64 = 0.5;
+    const ref_cy: f64 = 0.3;
+    const max_iters: u32 = 64;
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
+
+    const offsets = [_]struct { dcx: f64, dcy: f64 }{
+        .{ .dcx = 0.0, .dcy = 0.0 },
+        .{ .dcx = 0.001, .dcy = 0.001 },
+        .{ .dcx = 0.001, .dcy = -0.002 },
+        .{ .dcx = -0.01, .dcy = 0.01 },
+        .{ .dcx = 0.02, .dcy = -0.03 },
+    };
+    for (offsets) |off| {
+        const mu_rp = renderPerturbationPixel(off.dcx, off.dcy, orbit, max_iters, 0);
+        const mu_pp = perturbPixel(@floatCast(off.dcx), @floatCast(off.dcy), orbit, max_iters);
+        try testing.expect(mu_rp < @as(f32, @floatFromInt(max_iters)));
+        try testing.expect(mu_pp < @as(f32, @floatFromInt(max_iters)));
+        try testing.expectApproxEqAbs(mu_pp, mu_rp, 0.01);
+    }
+}
+
+test "renderPerturbationPixel Seahorse Valley regression" {
+    const ref_cx: f64 = -1.785897;
+    const ref_cy: f64 = 0.000055;
+    const range: f64 = 2.257306e-3;
+    const max_iters: u32 = 8192;
+
+    const offsets = [_]struct { dx: f64, dy: f64 }{
+        .{ .dx = 0.0, .dy = 0.0 },
+        .{ .dx = -0.3 * range, .dy = 0.0 },
+        .{ .dx = 0.3 * range, .dy = 0.0 },
+        .{ .dx = 0.0, .dy = -0.3 * range },
+        .{ .dx = 0.0, .dy = 0.3 * range },
+        .{ .dx = -0.5 * range, .dy = -0.5 * range },
+        .{ .dx = 0.5 * range, .dy = 0.5 * range },
+        .{ .dx = -0.7 * range, .dy = 0.0 },
+        .{ .dx = 0.7 * range, .dy = 0.0 },
+    };
+
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
+
+    for (offsets) |off| {
+        const pix_cx = ref_cx + off.dx;
+        const pix_cy = ref_cy + off.dy;
+        const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO);
+        const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
+
+        if (gt.escaped) {
+            try testing.expect(mu_rp < @as(f32, @floatFromInt(max_iters)));
+            const mu_gt_f64 = smoothIteration(gt.iter, gt.zx * gt.zx + gt.zy * gt.zy);
+            const mu_gt: f32 = @floatCast(mu_gt_f64);
+            try testing.expectApproxEqAbs(mu_gt, mu_rp, 0.5);
+        }
+    }
+}
+
 test "continueStandard from start matches standardPixel" {
     const cx: f64 = 0.5;
     const cy: f64 = 0.3;
