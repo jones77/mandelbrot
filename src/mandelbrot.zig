@@ -465,6 +465,7 @@ pub fn isCardioidOrBulb(cx: f32, cy2: f32) bool {
 }
 
 pub fn clearToOpaqueBlack(pixels: []u8) void {
+    if (pixels.len % 4 != 0) @panic("clearToOpaqueBlack: pixels.len must be a multiple of 4");
     @memset(pixels, 0);
     var a: usize = 3;
     while (a < pixels.len) : (a += 4) {
@@ -499,6 +500,10 @@ pub fn computeAutoZoomIters(range: f64) u32 {
     return nextPowerOf2(@as(u32, @intFromFloat(clamped)));
 }
 
+/// Maps screen pixel coordinates to complex coordinates.
+/// When range < ~1e-16 × |center|, the range/2 term rounds to zero in
+/// f64, and every pixel maps to the center coordinate.  See offset_x/y
+/// in ViewState for the sub-precise representation used at deep zoom.
 pub fn screenToComplex(sx: f64, sy: f64, view: ViewState, img_w: i32, img_h: i32) ComplexPoint {
     const aspect = @as(f64, @floatFromInt(img_w)) / @as(f64, @floatFromInt(img_h));
     const range_x = view.range;
