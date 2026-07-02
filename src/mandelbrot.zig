@@ -235,7 +235,7 @@ pub inline fn smoothIteration(iter: u32, norm_sq: f64) f64 {
 }
 
 /// Simplified perturbation (no glitch detection, rebasing, or f64 escape checks).
-/// Used only by tests. The production renderer uses an inline loop in renderer.zig.
+/// Used only by tests. The production renderer uses renderPerturbationPixel.
 /// Returns smooth iteration count `mu`, or `max_iters` as f32 for interior.
 pub fn perturbPixel(
     dcx: f32,
