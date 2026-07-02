@@ -30,78 +30,6 @@ pub const INITIAL_CENTER_X: f64 = -0.5;
 pub const INITIAL_CENTER_Y: f64 = 0.0;
 pub const INITIAL_RANGE: f64 = 3.5;
 
-test "smoothColor at boundary" {
-    buildPalette();
-    // mu >= max_iters → black (interior)
-    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(512.0, 512));
-    // mu == 0 → colored (not black)
-    const c0 = smoothColor(0.0, 1024);
-    try testing.expect(c0[3] == 255);
-    try testing.expect(!(c0[0] == 0 and c0[1] == 0 and c0[2] == 0));
-    // mu * 4.0 = 1024 → 1024 % 1024 = 0 → wraps to start of palette
-    try testing.expectEqualDeep(smoothColor(0.0, 1024), smoothColor(256.0, 1024));
-}
-
-test "smoothIteration known values" {
-    // iter=0, norm_sq=4.01 (just above escape) → mu ≈ 1.53
-    const mu0 = smoothIteration(0, 4.01);
-    try testing.expect(mu0 > 1.0 and mu0 < 2.0);
-    try testing.expectApproxEqAbs(mu0, 1.53, 0.01);
-
-    // iter=10, norm_sq=1000 → mu ≈ 9.21
-    const mu1 = smoothIteration(10, 1000.0);
-    try testing.expect(mu1 > 9.0 and mu1 < 10.0);
-    try testing.expectApproxEqAbs(mu1, 9.21, 0.01);
-
-    // iter=256, norm_sq=1e10 → mu ≈ 253.47
-    const mu2 = smoothIteration(256, 1e10);
-    try testing.expect(mu2 > 253.0 and mu2 < 254.0);
-
-    // Monotonicity: more iterations → larger mu at same norm_sq
-    try testing.expect(mu1 > mu0);
-    try testing.expect(mu2 > mu1);
-}
-
-test "smoothColor with NaN or inf returns black" {
-    buildPalette();
-    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(std.math.nan(f64), 1024));
-    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(std.math.inf(f64), 1024));
-    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(-std.math.inf(f64), 1024));
-}
-
-test "computeReference at high max_iters" {
-    const max_iters: u32 = 8192;
-    const orbit = try computeReference(1.0, 0.0, max_iters, std.testing.allocator);
-    defer std.testing.allocator.free(orbit);
-    try testing.expectEqual(@as(usize, 8192), orbit.len);
-
-    var escape_idx: ?usize = null;
-    for (orbit, 0..) |o, i| {
-        if (o.zx * o.zx + o.zy * o.zy > 4.0) { escape_idx = i; break; }
-    }
-    try testing.expect(escape_idx != null);
-    const ei = escape_idx.?;
-    for (orbit[0..ei]) |o| {
-        try testing.expect(std.math.isFinite(o.zx));
-        try testing.expect(std.math.isFinite(o.zy));
-    }
-}
-
-test "rebaseFallback at high iteration counts" {
-    const cases = [_]struct { cx: f64, cy: f64, max_iters: u32, expect_exterior: bool }{
-        .{ .cx = -0.75, .cy = 0.1, .max_iters = 4096, .expect_exterior = true },
-        .{ .cx = 0.0, .cy = 0.0, .max_iters = 4096, .expect_exterior = false },
-        .{ .cx = -1.5, .cy = 0.01, .max_iters = 4096, .expect_exterior = true },
-    };
-    for (cases) |c| {
-        const mu_rb = rebaseFallback(c.cx, c.cy, c.cx, c.cy, 0, c.max_iters);
-        const gt = groundTruthPixel(c.cx, c.cy, c.max_iters);
-        const rb_exterior = mu_rb < @as(f32, @floatFromInt(c.max_iters));
-        try testing.expectEqual(c.expect_exterior, rb_exterior);
-        try testing.expectEqual(c.expect_exterior, gt.escaped);
-    }
-}
-
 /// Selects which inner-loop algorithm the renderer uses.
 /// `auto` picks based on zoom depth (current default).
 pub const RenderMethod = enum {
@@ -1463,6 +1391,78 @@ test "regression: reference f64 overflow at 65536 iterations" {
         const mu = perturbPixel(0.0, 0.0, orbit, max_iters);
         try testing.expect(std.math.isFinite(mu));
         try testing.expect(mu < @as(f32, @floatFromInt(max_iters)));
+    }
+}
+
+test "smoothColor at boundary" {
+    buildPalette();
+    // mu >= max_iters → black (interior)
+    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(512.0, 512));
+    // mu == 0 → colored (not black)
+    const c0 = smoothColor(0.0, 1024);
+    try testing.expect(c0[3] == 255);
+    try testing.expect(!(c0[0] == 0 and c0[1] == 0 and c0[2] == 0));
+    // mu * 4.0 = 1024 → 1024 % 1024 = 0 → wraps to start of palette
+    try testing.expectEqualDeep(smoothColor(0.0, 1024), smoothColor(256.0, 1024));
+}
+
+test "smoothIteration known values" {
+    // iter=0, norm_sq=4.01 (just above escape) → mu ≈ 1.53
+    const mu0 = smoothIteration(0, 4.01);
+    try testing.expect(mu0 > 1.0 and mu0 < 2.0);
+    try testing.expectApproxEqAbs(mu0, 1.53, 0.01);
+
+    // iter=10, norm_sq=1000 → mu ≈ 9.21
+    const mu1 = smoothIteration(10, 1000.0);
+    try testing.expect(mu1 > 9.0 and mu1 < 10.0);
+    try testing.expectApproxEqAbs(mu1, 9.21, 0.01);
+
+    // iter=256, norm_sq=1e10 → mu ≈ 253.47
+    const mu2 = smoothIteration(256, 1e10);
+    try testing.expect(mu2 > 253.0 and mu2 < 254.0);
+
+    // Monotonicity: more iterations → larger mu at same norm_sq
+    try testing.expect(mu1 > mu0);
+    try testing.expect(mu2 > mu1);
+}
+
+test "smoothColor with NaN or inf returns black" {
+    buildPalette();
+    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(std.math.nan(f64), 1024));
+    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(std.math.inf(f64), 1024));
+    try testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, smoothColor(-std.math.inf(f64), 1024));
+}
+
+test "computeReference at high max_iters" {
+    const max_iters: u32 = 8192;
+    const orbit = try computeReference(1.0, 0.0, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
+    try testing.expectEqual(@as(usize, 8192), orbit.len);
+
+    var escape_idx: ?usize = null;
+    for (orbit, 0..) |o, i| {
+        if (o.zx * o.zx + o.zy * o.zy > 4.0) { escape_idx = i; break; }
+    }
+    try testing.expect(escape_idx != null);
+    const ei = escape_idx.?;
+    for (orbit[0..ei]) |o| {
+        try testing.expect(std.math.isFinite(o.zx));
+        try testing.expect(std.math.isFinite(o.zy));
+    }
+}
+
+test "rebaseFallback at high iteration counts" {
+    const cases = [_]struct { cx: f64, cy: f64, max_iters: u32, expect_exterior: bool }{
+        .{ .cx = -0.75, .cy = 0.1, .max_iters = 4096, .expect_exterior = true },
+        .{ .cx = 0.0, .cy = 0.0, .max_iters = 4096, .expect_exterior = false },
+        .{ .cx = -1.5, .cy = 0.01, .max_iters = 4096, .expect_exterior = true },
+    };
+    for (cases) |c| {
+        const mu_rb = rebaseFallback(c.cx, c.cy, c.cx, c.cy, 0, c.max_iters);
+        const gt = groundTruthPixel(c.cx, c.cy, c.max_iters);
+        const rb_exterior = mu_rb < @as(f32, @floatFromInt(c.max_iters));
+        try testing.expectEqual(c.expect_exterior, rb_exterior);
+        try testing.expectEqual(c.expect_exterior, gt.escaped);
     }
 }
 
