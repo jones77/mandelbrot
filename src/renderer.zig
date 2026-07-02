@@ -73,66 +73,7 @@ fn renderStrip(ctx: *RenderStrip) void {
             const mu: f32 = if (cfg.ref_orbit) |orbit| blk: {
                 const dcx = @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w -| 1)) - 0.5 * cfg.range_x;
                 const dcy = @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h -| 1)) - 0.5 * cfg.range_y;
-                var dx: f64 = dcx;
-                var dy: f64 = dcy;
-                var iter: u32 = 0;
-
-                var result: f32 = max_f;
-                while (iter < max_iters) : (iter += 1) {
-                    const ref = &orbit[iter];
-
-                    const Zx = ref.zx;
-                    const Zy = ref.zy;
-                    const Z_norm_sq = Zx * Zx + Zy * Zy;
-
-                    const rebase_zx = ref.zx + dx;
-                    const rebase_zy = ref.zy + dy;
-                    const rebase_cx = orbit[0].zx + dcx;
-                    const rebase_cy = orbit[0].zy + dcy;
-                    const rebase_norm_sq = rebase_zx * rebase_zx + rebase_zy * rebase_zy;
-
-                    if (!std.math.isFinite(Z_norm_sq)) {
-                        if (std.math.isFinite(ref.zx + ref.zy)) {
-                            result = m.rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
-                        } else {
-                            result = m.rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
-                        }
-                        break;
-                    }
-
-                    if (cfg.glitch_ratio > 0) {
-                        if (Z_norm_sq > @as(f64, m.GLITCH_MIN_NORM_SQ) and
-                            rebase_norm_sq < @as(f64, cfg.glitch_ratio) * Z_norm_sq)
-                        {
-                            result = m.rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
-                            break;
-                        }
-                    }
-
-                    if (dx * dx + dy * dy > Z_norm_sq) {
-                        result = m.rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
-                        break;
-                    }
-
-                    if (rebase_norm_sq > m.ESCAPE_RADIUS_SQ) {
-                        if (std.math.isFinite(rebase_norm_sq)) {
-                            result = @floatCast(m.smoothIteration(iter, rebase_norm_sq));
-                        } else if (std.math.isFinite(ref.zx + ref.zy)) {
-                            result = m.rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
-                        } else {
-                            result = m.rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
-                        }
-                        break;
-                    }
-
-                    const two_zd_re = 2.0 * (Zx * dx - Zy * dy);
-                    const two_zd_im = 2.0 * (Zx * dy + Zy * dx);
-                    const dsq_re = dx * dx - dy * dy;
-                    const dsq_im = 2.0 * dx * dy;
-                    dx = two_zd_re + dsq_re + dcx;
-                    dy = two_zd_im + dsq_im + dcy;
-                }
-                break :blk result;
+                break :blk m.renderPerturbationPixel(dcx, dcy, orbit, max_iters, cfg.glitch_ratio);
             } else if (render_fallback_f64 or max_iters > m.F32_MAX_ITERS_THRESHOLD)
                 m.rebaseFallback(cx_f64, cy_f64, cx_f64, cy_f64, 0, max_iters)
             else m.standardPixel(cx, cy, max_iters, cfg.interior_eps_sq, cfg.periodicity_eps_sq);

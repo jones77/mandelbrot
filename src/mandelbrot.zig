@@ -266,6 +266,78 @@ pub fn perturbPixel(
     return @as(f32, @floatFromInt(max_iters));
 }
 
+/// Production perturbation pixel renderer with glitch detection, Z overflow
+/// handling, and f64 rebasing. Used by the multi-threaded renderer.
+/// Returns smooth iteration count `mu`, or `max_iters` as f32 for interior.
+pub fn renderPerturbationPixel(
+    dcx: f64,
+    dcy: f64,
+    orbit: []const RefOrbit,
+    max_iters: u32,
+    glitch_ratio: f32,
+) f32 {
+    var dx: f64 = dcx;
+    var dy: f64 = dcy;
+    var iter: u32 = 0;
+    const max_f: f32 = @floatFromInt(max_iters);
+    var result: f32 = max_f;
+
+    while (iter < max_iters) : (iter += 1) {
+        const ref = &orbit[iter];
+        const Zx = ref.zx;
+        const Zy = ref.zy;
+        const Z_norm_sq = Zx * Zx + Zy * Zy;
+
+        const rebase_zx = ref.zx + dx;
+        const rebase_zy = ref.zy + dy;
+        const rebase_cx = orbit[0].zx + dcx;
+        const rebase_cy = orbit[0].zy + dcy;
+        const rebase_norm_sq = rebase_zx * rebase_zx + rebase_zy * rebase_zy;
+
+        if (!std.math.isFinite(Z_norm_sq)) {
+            if (std.math.isFinite(ref.zx + ref.zy)) {
+                result = rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
+            } else {
+                result = rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
+            }
+            break;
+        }
+
+        if (glitch_ratio > 0) {
+            if (Z_norm_sq > @as(f64, GLITCH_MIN_NORM_SQ) and
+                rebase_norm_sq < @as(f64, glitch_ratio) * Z_norm_sq)
+            {
+                result = rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
+                break;
+            }
+        }
+
+        if (dx * dx + dy * dy > Z_norm_sq) {
+            result = rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
+            break;
+        }
+
+        if (rebase_norm_sq > ESCAPE_RADIUS_SQ) {
+            if (std.math.isFinite(rebase_norm_sq)) {
+                result = @floatCast(smoothIteration(iter, rebase_norm_sq));
+            } else if (std.math.isFinite(ref.zx + ref.zy)) {
+                result = rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
+            } else {
+                result = rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
+            }
+            break;
+        }
+
+        const two_zd_re = 2.0 * (Zx * dx - Zy * dy);
+        const two_zd_im = 2.0 * (Zx * dy + Zy * dx);
+        const dsq_re = dx * dx - dy * dy;
+        const dsq_im = 2.0 * dx * dy;
+        dx = two_zd_re + dsq_re + dcx;
+        dy = two_zd_im + dsq_im + dcy;
+    }
+    return result;
+}
+
 /// Standard (non-perturbation) per-pixel iteration.
 /// Returns smooth iteration count `mu`, or `max_iters` as f32 for interior.
 pub inline fn standardPixel(
