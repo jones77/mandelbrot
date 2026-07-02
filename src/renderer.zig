@@ -56,13 +56,13 @@ fn renderStrip(ctx: *RenderStrip) void {
             return;
         }
 
-        const cy_f64 = cfg.top + @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h -| 1));
+        const cy_f64 = cfg.top + @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h));
         const cy: f32 = @floatCast(cy_f64);
         const cy2 = cy * cy;
 
         var px: usize = 0;
         while (px < w) : (px += 1) {
-            const cx_f64 = cfg.left + @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w -| 1));
+            const cx_f64 = cfg.left + @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w));
             const cx: f32 = @floatCast(cx_f64);
 
             // Cardioid & period-2 bulb pre-check (always interior, skip iteration).
@@ -73,8 +73,8 @@ fn renderStrip(ctx: *RenderStrip) void {
 
             // Path selection: perturbation (if ref available) > f64 (if deep zoom or high iters) > f32 standard.
             const mu: f32 = if (cfg.ref_orbit) |orbit| blk: {
-                const dcx = @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w -| 1)) - 0.5 * cfg.range_x + cfg.offset_x;
-                const dcy = @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h -| 1)) - 0.5 * cfg.range_y + cfg.offset_y;
+                const dcx = @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w)) - 0.5 * cfg.range_x + cfg.offset_x;
+                const dcy = @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h)) - 0.5 * cfg.range_y + cfg.offset_y;
                 break :blk m.renderPerturbationPixel(dcx, dcy, orbit, max_iters, cfg.glitch_ratio);
             } else if (render_fallback_f64 or max_iters > m.F32_MAX_ITERS_THRESHOLD)
                 m.rebaseFallback(cx_f64, cy_f64, cx_f64, cy_f64, 0, max_iters)
