@@ -487,6 +487,18 @@ pub fn nextPowerOf2(n: u32) u32 {
     return x + 1;
 }
 
+/// Computes the auto-scaled iteration count based on zoom depth.
+/// At INITIAL_RANGE returns DEFAULT_MAX_ITERS (2048). At deeper zoom,
+/// scales iter count logarithmically up to AUTO_SCALE_CAP (16384).
+pub fn computeAutoZoomIters(range: f64) u32 {
+    const zoom_factor = INITIAL_RANGE / range;
+    const log2_zf = @log(zoom_factor) / @log(2.0);
+    const log2_start = @log(@as(f64, @floatFromInt(DEFAULT_MAX_ITERS))) / @log(2.0);
+    const target_f = @exp2(log2_start + log2_zf * AUTO_SCALE_SLOPE);
+    const clamped = @min(target_f, @as(f64, @floatFromInt(AUTO_SCALE_CAP)));
+    return nextPowerOf2(@as(u32, @intFromFloat(clamped)));
+}
+
 pub fn screenToComplex(sx: f64, sy: f64, view: ViewState, img_w: i32, img_h: i32) ComplexPoint {
     const aspect = @as(f64, @floatFromInt(img_w)) / @as(f64, @floatFromInt(img_h));
     const range_x = view.range;
@@ -751,29 +763,12 @@ test "zoom math round-trip" {
 }
 
 test "zoom auto-scale iterations" {
-    const v = ViewState{
-        .center_x = -0.5,
-        .center_y = 0.0,
-        .range = 3.5,
-        .max_iters = DEFAULT_MAX_ITERS,
-    };
-    const zoom_factor = INITIAL_RANGE / v.range;
-    const log2_zf = @log(zoom_factor) / @log(2.0);
-    const log2_start = @log(@as(f64, @floatFromInt(DEFAULT_MAX_ITERS))) / @log(2.0);
-    const target_f = @exp2(log2_start + log2_zf * AUTO_SCALE_SLOPE);
-    const clamped = @min(target_f, @as(f64, @floatFromInt(AUTO_SCALE_CAP)));
-    const target = nextPowerOf2(@as(u32, @intFromFloat(clamped)));
-    try testing.expect(target <= DEFAULT_MAX_ITERS);
-    const range2 = 3.5 / 100.0;
-    const zf2 = INITIAL_RANGE / range2;
-    const t2 = nextPowerOf2(@as(u32, @intFromFloat(@min(
-        @exp2(
-            @log(@as(f64, @floatFromInt(DEFAULT_MAX_ITERS))) / @log(2.0) +
-            (@log(zf2) / @log(2.0)) * AUTO_SCALE_SLOPE,
-        ),
-        @as(f64, @floatFromInt(AUTO_SCALE_CAP)),
-    ))));
-    try testing.expect(t2 > DEFAULT_MAX_ITERS);
+    // At INITIAL_RANGE, zoom factor = 1 → target stays at baseline 2048
+    try testing.expectEqual(DEFAULT_MAX_ITERS, computeAutoZoomIters(INITIAL_RANGE));
+    // At 100× zoom, target should scale up to 8192
+    try testing.expectEqual(@as(u32, 8192), computeAutoZoomIters(INITIAL_RANGE / 100.0));
+    // At extreme zoom, target should be capped at AUTO_SCALE_CAP
+    try testing.expectEqual(@as(u32, AUTO_SCALE_CAP), computeAutoZoomIters(INITIAL_RANGE / 1e9));
 }
 
 // --- Perturbation boundary checking tests ---

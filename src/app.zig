@@ -920,12 +920,7 @@ pub const App = struct {
             self.view.offset_y = final_oy;
             self.view.range = new_range;
 
-            const zoom_factor = m.INITIAL_RANGE / self.view.range;
-            const log2_zf = @log(zoom_factor) / @log(2.0);
-            const log2_start = @log(@as(f64, @floatFromInt(m.DEFAULT_MAX_ITERS))) / @log(2.0);
-            const target_f = @exp2(log2_start + log2_zf * m.AUTO_SCALE_SLOPE);
-            const clamped = @min(target_f, @as(f64, @floatFromInt(m.AUTO_SCALE_CAP)));
-            const target_iters = m.nextPowerOf2(@as(u32, @intFromFloat(clamped)));
+            const target_iters = m.computeAutoZoomIters(self.view.range);
             if (target_iters > self.view.max_iters and target_iters <= m.AUTO_SCALE_CAP) {
                 self.view.max_iters = target_iters;
             }
