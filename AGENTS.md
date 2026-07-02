@@ -6,6 +6,13 @@ Interactive Mandelbrot viewer in Zig 0.16 + raylib (via raylib-zig v5.6-dev).
 Four source files: `main.zig` (entry), `app.zig` (UI/history/clipboard),
 `renderer.zig` (multi-threaded rendering), `mandelbrot.zig` (pure math + tests).
 
+## Zig conventions
+
+Follow `lib/std/*.zig` conventions. Key exemplars to read for patterns:
+- `std/fmt.zig` — overall file structure (imports → constants → types → functions → test block)
+- `std/array_list.zig` — type with methods, generics
+- `std/testing.zig` — test helpers
+
 ## References
 
 [Chéritat](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set)
@@ -66,16 +73,16 @@ zig build unit     # 37 pure-math tests, no raylib, prints output
 
 ## Agent debugging
 
-Events logged to stderr with ms-precision timestamps:
+Events logged to stderr with ISO 8601 UTC timestamps:
 
 ```
-[+0000.000] [app]    init 900x740 dpi=1 method=auto
-[+0123.456] [drag]   zoom from 3.50000000 to 0.38900000 iters=4096
-[+0125.678] [anim]   start in dur=0.500 from=3.50000000 to=0.38900000
-[+0626.789] [anim]   end
-[+0640.123] [history] back entry=0 range=3.50000000
-[+0640.456] [anim]   start out dur=0.500 from=0.38900000 to=3.50000000
-[+1141.234] [anim]   end
+2026-07-02T12:34:56.789Z [app]    init 900x740 dpi=1 method=auto
+2026-07-02T12:34:57.801Z [drag]   zoom from 3.50000000 to 0.38900000 iters=4096
+2026-07-02T12:34:59.124Z [anim]   start in dur=0.500 from=3.50000000 to=0.38900000
+2026-07-02T12:36:21.721Z [anim]   end
+2026-07-02T12:36:23.456Z [history] back entry=0 range=3.50000000 anim=idle
+2026-07-02T12:36:23.789Z [anim]   start out dur=0.500 from=0.38900000 to=3.50000000
+2026-07-02T12:37:22.345Z [anim]   end
 ```
 
 Capture to a file and analyse:
@@ -85,6 +92,7 @@ zig build run 2> debug.log
 grep '\[anim\]' debug.log           # all animation events
 grep '\[drag\]' debug.log           # all drag-zoom events
 grep -E '\[(anim|drag|history)\]' debug.log   # user interactions
+grep 'ignored' debug.log            # missed navigation attempts
 ```
 
 ### Event scopes
@@ -94,7 +102,7 @@ grep -E '\[(anim|drag|history)\]' debug.log   # user interactions
 | `app` | lifecycle, resize | dimensions, dpi |
 | `anim` | animation start/end | direction, dur, from/to range |
 | `drag` | drag-to-zoom | from/to range, iters |
-| `history` | arrow navigation | entry index, target range |
+| `history` | arrow navigation | entry index, target range, anim state; or `ignored` when at boundary |
 | `iters` | iteration adjustment | inc/dec, old → new |
 | `view` | reset to default | — |
 | `ui` | textbox, clipboard | range, operation |
@@ -106,5 +114,5 @@ grep -E '\[(anim|drag|history)\]' debug.log   # user interactions
 - `>200ms` gap → `renderFresh` was called (dimension mismatch)
 - Large gap between `[anim] start` and `[anim] end` → user was idle
 - `[anim] end` missing → animation was cancelled (resize, new input)
-- Timestamps are ms since `InitWindow` (monotonic)
+- Timestamps are UTC, monotonic within a session
 - No output = idle frames (nothing user-initiated occurred during those gaps)

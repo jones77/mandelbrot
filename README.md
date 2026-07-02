@@ -5,6 +5,7 @@ An interactive Mandelbrot set explorer written in [Zig](https://ziglang.org/).
 ## Features
 
 - **1:1 box zoom** — click and drag a square selection to zoom in
+- **Animations** — animates zoom in and out
 - **Undo/redo** — ← to undo, → to redo (up to 64 levels, instant from pixel cache)
 - **Iteration control** — ± keys or on-screen buttons double/halve detail; auto-scales on zoom
 - **Reset** — press R to return to the default overview

@@ -24,6 +24,8 @@ const RenderConfig = struct {
     glitch_ratio: f32,
     ref_orbit: ?[]const m.RefOrbit,
     rows_completed: ?[]bool,
+    offset_x: f64,
+    offset_y: f64,
 };
 
 const RenderStrip = struct {
@@ -71,8 +73,8 @@ fn renderStrip(ctx: *RenderStrip) void {
 
             // Path selection: perturbation (if ref available) > f64 (if deep zoom or high iters) > f32 standard.
             const mu: f32 = if (cfg.ref_orbit) |orbit| blk: {
-                const dcx = @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w -| 1)) - 0.5 * cfg.range_x;
-                const dcy = @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h -| 1)) - 0.5 * cfg.range_y;
+                const dcx = @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w -| 1)) - 0.5 * cfg.range_x + cfg.offset_x;
+                const dcy = @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h -| 1)) - 0.5 * cfg.range_y + cfg.offset_y;
                 break :blk m.renderPerturbationPixel(dcx, dcy, orbit, max_iters, cfg.glitch_ratio);
             } else if (render_fallback_f64 or max_iters > m.F32_MAX_ITERS_THRESHOLD)
                 m.rebaseFallback(cx_f64, cy_f64, cx_f64, cy_f64, 0, max_iters)
@@ -121,10 +123,10 @@ pub fn renderMandelbrot(
     const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
     const range_x = view.range;
     const range_y = view.range / aspect;
-    const left = view.center_x - range_x / 2.0;
-    const right = view.center_x + range_x / 2.0;
-    const top = view.center_y - range_y / 2.0;
-    const bottom = view.center_y + range_y / 2.0;
+    const left = view.center_x + view.offset_x - range_x / 2.0;
+    const right = view.center_x + view.offset_x + range_x / 2.0;
+    const top = view.center_y + view.offset_y - range_y / 2.0;
+    const bottom = view.center_y + view.offset_y + range_y / 2.0;
 
     if (clear) {
         m.clearToOpaqueBlack(pixels);
@@ -166,6 +168,8 @@ pub fn renderMandelbrot(
         .glitch_ratio = m.GLITCH_RATIO,
         .ref_orbit = ref_orbit,
         .rows_completed = rows_completed,
+        .offset_x = view.offset_x,
+        .offset_y = view.offset_y,
     };
 
     var strips: [MAX_RENDER_THREADS]RenderStrip = undefined;

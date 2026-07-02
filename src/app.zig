@@ -179,8 +179,9 @@ fn computeAnimDuration(from_view: m.ViewState, to_view: m.ViewState) f64 {
     const area_duration = ANIM_DURATION_MIN + area_t * (ANIM_DURATION_MAX - ANIM_DURATION_MIN);
 
     const max_range = @max(from_view.range, to_view.range);
-    const dx = from_view.center_x - to_view.center_x;
-    const dy = from_view.center_y - to_view.center_y;
+    // Use effective center difference (including sub-precise offset) for deep zoom.
+    const dx = (from_view.center_x - to_view.center_x) + (from_view.offset_x - to_view.offset_x);
+    const dy = (from_view.center_y - to_view.center_y) + (from_view.offset_y - to_view.offset_y);
     const center_dist = @sqrt(dx * dx + dy * dy);
     const center_t = @min(1.0, center_dist / (max_range * 2.0));
     const center_duration = ANIM_DURATION_MIN + center_t * (ANIM_DURATION_MAX - ANIM_DURATION_MIN);
@@ -481,12 +482,12 @@ pub const App = struct {
         const vph = self.viewportDrawHeight();
         const draw_w: f32 = @floatFromInt(self.render_w);
         const draw_h: f32 = @floatFromInt(vph);
-        const from_left = from_view.center_x - from_view.range / 2.0;
-        const from_top = from_view.center_y - from_view.range / (2.0 * aspect);
-        const to_left = to_view.center_x - to_view.range / 2.0;
-        const to_top = to_view.center_y - to_view.range / (2.0 * aspect);
-        self.highlight.x = @floatCast((from_left - to_left) / to_view.range * draw_w);
-        self.highlight.y = @floatCast((from_top - to_top) / (to_view.range / aspect) * draw_h + @as(f32, @floatFromInt(TOTAL_TOP)));
+        // Effective center difference (handles deep zoom sub-precise offsets).
+        const cx_diff = (from_view.center_x - to_view.center_x) + (from_view.offset_x - to_view.offset_x);
+        const cy_diff = (from_view.center_y - to_view.center_y) + (from_view.offset_y - to_view.offset_y);
+        const r_diff = to_view.range - from_view.range;
+        self.highlight.x = @floatCast((cx_diff - r_diff / 2.0) / to_view.range * draw_w);
+        self.highlight.y = @floatCast((cy_diff - r_diff / (2.0 * aspect)) / (to_view.range / aspect) * draw_h + @as(f32, @floatFromInt(TOTAL_TOP)));
         self.highlight.w = @floatCast(from_view.range / to_view.range * draw_w);
         self.highlight.h = @floatCast(from_view.range / to_view.range * draw_h);
         self.highlight.start_time = rl.getTime();
@@ -557,14 +558,18 @@ pub const App = struct {
         const from_view = &anim.from_view;
 
         if (interp.range <= from_view.range) {
-            const from_left = from_view.center_x - from_view.range / 2.0;
-            const from_top = from_view.center_y - from_view.range / (2.0 * aspect);
+            // Effective center offset (handles deep zoom where f64 loses
+            // center_x + offset_x precision).  At normal zoom the center
+            // difference dominates; at deep zoom the offset difference
+            // captures all movement.
+            const cx_diff = (interp.center_x - from_view.center_x) + (interp.offset_x - from_view.offset_x);
+            const cy_diff = (interp.center_y - from_view.center_y) + (interp.offset_y - from_view.offset_y);
 
-            const interp_left = interp.center_x - interp.range / 2.0;
-            const interp_top = interp.center_y - interp.range / (2.0 * aspect);
+            const interp_left_offset = cx_diff - (interp.range - from_view.range) / 2.0;
+            const interp_top_offset = cy_diff - (interp.range - from_view.range) / (2.0 * aspect);
 
-            const src_x: f32 = @floatCast(@max(0.0, (interp_left - from_left) / from_view.range * tex_w));
-            const src_y: f32 = @floatCast(@max(0.0, (interp_top - from_top) / (from_view.range / aspect) * tex_h));
+            const src_x: f32 = @floatCast(@max(0.0, interp_left_offset / from_view.range * tex_w));
+            const src_y: f32 = @floatCast(@max(0.0, interp_top_offset / (from_view.range / aspect) * tex_h));
             const src_w: f32 = @floatCast(@max(0.0, @min(interp.range / from_view.range * tex_w, tex_w - src_x)));
             const src_h: f32 = @floatCast(@max(0.0, @min(interp.range / from_view.range * tex_h, tex_h - src_y)));
 
@@ -573,8 +578,10 @@ pub const App = struct {
             rl.drawTexturePro(tex, src, dst, .{ .x = 0, .y = 0 }, 0, .white);
         } else {
             const fraction: f32 = @floatCast(from_view.range / interp.range);
-            const offset_x: f32 = @floatCast((from_view.center_x - interp.center_x) / interp.range + 0.5);
-            const offset_y: f32 = @floatCast((from_view.center_y - interp.center_y) / (interp.range / aspect) + 0.5);
+            const cx_diff = (from_view.center_x - interp.center_x) + (from_view.offset_x - interp.offset_x);
+            const cy_diff = (from_view.center_y - interp.center_y) + (from_view.offset_y - interp.offset_y);
+            const offset_x: f32 = @floatCast(cx_diff / interp.range + 0.5);
+            const offset_y: f32 = @floatCast(cy_diff / (interp.range / aspect) + 0.5);
 
             const dst_x = offset_x * draw_w - fraction * draw_w / 2.0;
             const dst_y = draw_y + (offset_y * draw_h - fraction * draw_h / 2.0);
@@ -703,7 +710,9 @@ pub const App = struct {
                     if (self.history_ptr > 0) {
                         self.history_ptr -= 1;
                         try self.startZoomAnimation(&self.history[self.history_ptr]);
-                        logEvent(.history, "back entry={d} range={d:.6}", .{ self.history_ptr, self.history[self.history_ptr].view.range });
+                        logEvent(.history, "back entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
+                    } else {
+                        logEvent(.history, "back ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
                     }
                     tb_click_consumed = true;
                 }
@@ -711,7 +720,9 @@ pub const App = struct {
                     if (self.history_ptr + 1 < self.history_len) {
                         self.history_ptr += 1;
                         try self.startZoomAnimation(&self.history[self.history_ptr]);
-                        logEvent(.history, "forward entry={d} range={d:.6}", .{ self.history_ptr, self.history[self.history_ptr].view.range });
+                        logEvent(.history, "forward entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
+                    } else {
+                        logEvent(.history, "forward ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
                     }
                     tb_click_consumed = true;
                 }
@@ -768,13 +779,17 @@ pub const App = struct {
                     if (self.history_ptr > 0) {
                         self.history_ptr -= 1;
                         try self.startZoomAnimation(&self.history[self.history_ptr]);
-                        logEvent(.history, "back entry={d} range={d:.6}", .{ self.history_ptr, self.history[self.history_ptr].view.range });
+                        logEvent(.history, "back entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
+                    } else {
+                        logEvent(.history, "back ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
                     }
                 } else {
                     if (self.history_ptr + 1 < self.history_len) {
                         self.history_ptr += 1;
                         try self.startZoomAnimation(&self.history[self.history_ptr]);
-                        logEvent(.history, "forward entry={d} range={d:.6}", .{ self.history_ptr, self.history[self.history_ptr].view.range });
+                        logEvent(.history, "forward entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
+                    } else {
+                        logEvent(.history, "forward ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
                     }
                 }
             }
@@ -844,18 +859,50 @@ pub const App = struct {
             const phys_cy = (sel_cy - @as(f64, @floatFromInt(TOTAL_TOP))) * dpi_f;
             const phys_size = size * dpi_f;
 
-            const c_center = m.screenToComplex(phys_cx, phys_cy, self.view, self.image.width, self.image.height);
             const smaller = @min(self.image.width, self.image.height);
             const new_range = self.view.range * (phys_size / @as(f64, @floatFromInt(smaller)));
             logEvent(.drag, "zoom from {d:.6} to {d:.6} iters={d}", .{ self.view.range, new_range, self.view.max_iters });
+
+            // Compute center offset relative to current view instead of using
+            // screenToComplex, which loses sub-precise position at deep zoom.
+            const aspect = self.viewportAspect();
+            const delta_x = (phys_cx / @as(f64, @floatFromInt(self.image.width)) - 0.5) * self.view.range;
+            const delta_y = (phys_cy / @as(f64, @floatFromInt(self.image.height)) - 0.5) * (self.view.range / aspect);
+
+            // Fold offset into center_x when it's large enough to be
+            // representable in f64 (normal zoom).  Keep it separate only
+            // at deep zoom where center_x + offset rounds to center_x.
+            const center_mag = @max(@abs(self.view.center_x), @abs(self.view.center_y));
+            const fold_eps = center_mag * std.math.floatEps(f64);
+
+            const new_ox = self.view.offset_x + delta_x;
+            const new_oy = self.view.offset_y + delta_y;
+
+            var final_cx = self.view.center_x;
+            var final_cy = self.view.center_y;
+            var final_ox: f64 = 0;
+            var final_oy: f64 = 0;
+
+            if (@abs(new_ox) >= fold_eps) {
+                final_cx += new_ox;
+            } else {
+                final_ox = new_ox;
+            }
+            if (@abs(new_oy) >= fold_eps) {
+                final_cy += new_oy;
+            } else {
+                final_oy = new_oy;
+            }
 
             truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
 
             {
                 const from_view = self.view;
                 const to_view = m.ViewState{
-                    .center_x = c_center.x,
-                    .center_y = c_center.y,
+                    .center_x = final_cx,
+                    .center_y = final_cy,
+                    .offset_x = final_ox,
+                    .offset_y = final_oy,
                     .range = new_range,
                     .max_iters = self.view.max_iters,
                 };
@@ -867,8 +914,10 @@ pub const App = struct {
                 self.anim.duration = computeAnimDuration(from_view, to_view);
             }
 
-            self.view.center_x = c_center.x;
-            self.view.center_y = c_center.y;
+            self.view.center_x = final_cx;
+            self.view.center_y = final_cy;
+            self.view.offset_x = final_ox;
+            self.view.offset_y = final_oy;
             self.view.range = new_range;
 
             const zoom_factor = m.INITIAL_RANGE / self.view.range;
