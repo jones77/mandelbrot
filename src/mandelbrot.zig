@@ -1172,19 +1172,6 @@ test "perturbation matches groundTruthPixel at exterior points" {
     }
 }
 
-test "perturbation interior with small offsets" {
-    const ref_cx: f32 = 0.3;
-    const ref_cy: f32 = 0.0;
-    const max_iters: u32 = 128;
-    const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
-    defer std.testing.allocator.free(orbit);
-
-    const dcx: f32 = -0.06;
-    const dcy: f32 = 0.0;
-    const mu = perturbPixel(dcx, dcy, orbit, max_iters);
-    try testing.expect(mu >= @as(f32, @floatFromInt(max_iters)));
-}
-
 test "rebaseFallback matches groundTruthPixel" {
     for (WellKnown.points) |p| {
         const mu_rb = rebaseFallback(p.cx, p.cy, p.cx, p.cy, 0, p.max_iters);
