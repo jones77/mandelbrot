@@ -1,7 +1,7 @@
 const std = @import("std");
 const m = @import("mandelbrot.zig");
-
-const PIXEL_CHANNELS: u32 = 4;
+const PIXEL_CHANNELS = @import("util.zig").PIXEL_CHANNELS;
+const isoNow = @import("util.zig").isoNow;
 
 const MAX_RENDER_THREADS: usize = 8;
 const MIN_ROWS_PER_THREAD: usize = 32;
@@ -21,7 +21,7 @@ const RenderConfig = struct {
     get_time_fn: *const fn () f64,
     interior_eps_sq: f32,
     periodicity_eps_sq: f32,
-    glitch_eps_sq: f32,
+    glitch_ratio: f32,
     ref_orbit: ?[]const m.RefOrbit,
     rows_completed: ?[]bool,
 };
@@ -106,9 +106,9 @@ fn renderStrip(ctx: *RenderStrip) void {
                         break;
                     }
 
-                    if (cfg.glitch_eps_sq > 0) {
+                    if (cfg.glitch_ratio > 0) {
                         if (Z_norm_sq > @as(f64, m.GLITCH_MIN_NORM_SQ) and
-                            rebase_norm_sq < @as(f64, cfg.glitch_eps_sq) * Z_norm_sq)
+                            rebase_norm_sq < @as(f64, cfg.glitch_ratio) * Z_norm_sq)
                         {
                             result = m.rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
                             break;
@@ -155,12 +155,16 @@ fn renderStrip(ctx: *RenderStrip) void {
 }
 
 fn logTimeout(view: m.ViewState, timeout_s: f64) void {
+    var ts_buf: [24]u8 = undefined;
+    const ts = isoNow(&ts_buf);
     std.debug.print(
-        \\TIMEOUT: Mandelbrot render exceeded {d:.0}s
-        \\  To recreate: center=({d:.16}, {d:.16})
-        \\  range={e:.4}  iters={d}
+        \\{s} [render] timeout
+        \\   exceeded {d:.0}s
+        \\   center=({d:.16}, {d:.16})
+        \\   range={e:.4}  iters={d}
         \\
     , .{
+        ts,
         timeout_s,
         view.center_x,
         view.center_y,
@@ -224,7 +228,7 @@ pub fn renderMandelbrot(
         .get_time_fn = get_time_fn,
         .interior_eps_sq = interior_eps_sq,
         .periodicity_eps_sq = periodicity_eps_sq,
-        .glitch_eps_sq = m.GLITCH_EPSILON,
+        .glitch_ratio = m.GLITCH_RATIO,
         .ref_orbit = ref_orbit,
         .rows_completed = rows_completed,
     };

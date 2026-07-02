@@ -9,9 +9,9 @@ pub const BULB_RADIUS_SQ: f64 = 0.0625;
 pub const CARDIOID_Y_MAX: f64 = 3.0 * @sqrt(3.0) / 8.0;
 pub const ESCAPE_RADIUS_SQ: f64 = 4.0;
 
-/// Pauldelbrot threshold: when |z|² / |Z|² < ε, the pixel's orbit has
-/// diverged from the reference (|z| is bounded while |Z| grows).
-pub const GLITCH_EPSILON: f32 = 1e-4;
+/// Pauldelbrot ratio threshold: when |z|² / |Z|² < r, the pixel's orbit
+/// has diverged from the reference (|z| is bounded while |Z| grows).
+pub const GLITCH_RATIO: f32 = 1e-4;
 /// Minimum |Z|² required before applying the Pauldelbrot check — avoids
 /// division by near-zero when the reference hasn't escaped yet.
 pub const GLITCH_MIN_NORM_SQ: f32 = 1e-10;
@@ -150,7 +150,7 @@ pub fn buildPalette() void {
     }
 }
 
-pub fn hslToRgb(h: f32, s: f32, l: f32) [4]u8 {
+fn hslToRgb(h: f32, s: f32, l: f32) [4]u8 {
     const c = (1.0 - @abs(2.0 * l - 1.0)) * s;
     const hp = h / 60.0;
     const x = c * (1.0 - @abs(@mod(hp, 2.0) - 1.0));
@@ -494,12 +494,12 @@ pub fn constrainDragSquare(start_x: f64, start_y: f64, raw_mx: f64, raw_my: f64)
 }
 
 pub fn lerpViewState(a: ViewState, b: ViewState, t: f64) ViewState {
-    return ViewState{
+    return .{
         .center_x = a.center_x + (b.center_x - a.center_x) * t,
         .center_y = a.center_y + (b.center_y - a.center_y) * t,
         .range = a.range + (b.range - a.range) * t,
-        .max_iters = if (t < 0.5) a.max_iters else b.max_iters,
-        .render_method = if (t < 0.5) a.render_method else b.render_method,
+        .max_iters = a.max_iters,
+        .render_method = a.render_method,
     };
 }
 

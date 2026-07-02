@@ -2,6 +2,8 @@ const std = @import("std");
 const rl = @import("raylib");
 const m = @import("mandelbrot.zig");
 const renderer = @import("renderer.zig");
+const logEvent = @import("util.zig").logEvent;
+const PIXEL_CHANNELS = @import("util.zig").PIXEL_CHANNELS;
 
 const DEFAULT_W: i32 = 900;
 const DEFAULT_H: i32 = 800;
@@ -21,8 +23,6 @@ const MAX_HISTORY: usize = 64;
 const MIN_SELECTION_PX: f64 = 8.0;
 const RENDER_TIMEOUT_S: f64 = 60.0;
 const CLIPBOARD_BUF: usize = 256;
-
-const PIXEL_CHANNELS: u32 = 4;
 
 const COL_BG = rl.Color{ .r = 240, .g = 240, .b = 245, .a = 255 };
 const COL_BAR = rl.Color{ .r = 235, .g = 235, .b = 240, .a = 255 };
@@ -67,16 +67,6 @@ const ASCII_PRN_MAX: i32 = 126;
 const ASCII_PRN_COUNT = ASCII_PRN_MAX - ASCII_PRN_MIN + 1;
 const CP_ARROW_LEFT: i32 = 0x2190;
 const CP_ARROW_RIGHT: i32 = 0x2192;
-const MS_PER_S: f64 = 1000.0;
-
-fn logEvent(comptime scope: anytype, comptime fmt: []const u8, args: anytype) void {
-    const now_ms: u64 = @intFromFloat(rl.getTime() * MS_PER_S);
-    const s = now_ms / 1000;
-    const ms = now_ms % 1000;
-    std.debug.print("[+{d:0>5}.{d:0>3}] [{s}] ", .{ s, ms, @tagName(scope) });
-    std.debug.print(fmt, args);
-    std.debug.print("\n", .{});
-}
 
 const TextBuf = struct {
     buf: [TB_CAP + 1]u8,
@@ -198,8 +188,15 @@ fn computeAnimDuration(from_view: m.ViewState, to_view: m.ViewState) f64 {
     return @max(area_duration, center_duration);
 }
 
+fn parseField(text: []const u8, key: []const u8) ?[]const u8 {
+    const pos = std.mem.indexOfPos(u8, text, 0, key) orelse return null;
+    const start = pos + key.len;
+    var end = start;
+    while (end < text.len and text[end] != ' ') end += 1;
+    return if (start < end) text[start..end] else null;
+}
+
 fn parseViewState(text: []const u8) ?m.ViewState {
-    // Accept both old "(cx, cy)" and new "x=... y=..." formats.
     const paren = std.mem.indexOfScalar(u8, text, '(');
     if (paren != null) {
         const after_paren = text[paren.? + 1 ..];
@@ -209,48 +206,21 @@ fn parseViewState(text: []const u8) ?m.ViewState {
         const close = std.mem.indexOfScalar(u8, after_comma, ')') orelse return null;
         const cy = std.fmt.parseFloat(f64, std.mem.trim(u8, after_comma[0..close], " ")) catch return null;
 
-        const rpos = std.mem.indexOfPos(u8, text, 0, "range=") orelse return null;
-        const rstart = rpos + 6;
-        var rend = rstart;
-        while (rend < text.len and text[rend] != ' ' and text[rend] != ',' and text[rend] != ')') rend += 1;
-        if (rstart >= rend) return null;
-        const range = std.fmt.parseFloat(f64, text[rstart..rend]) catch return null;
-
-        const ipos = std.mem.indexOfPos(u8, text, 0, "iters=") orelse return null;
-        const istart = ipos + 6;
-        var iend = istart;
-        while (iend < text.len and text[iend] >= '0' and text[iend] <= '9') iend += 1;
-        if (istart >= iend) return null;
-        const iters = std.fmt.parseInt(u32, text[istart..iend], 10) catch return null;
+        const range_str = parseField(text, "range=") orelse return null;
+        const range = std.fmt.parseFloat(f64, range_str) catch return null;
+        const iters_str = parseField(text, "iters=") orelse return null;
+        const iters = std.fmt.parseInt(u32, iters_str, 10) catch return null;
 
         return m.ViewState{ .center_x = cx, .center_y = cy, .range = range, .max_iters = iters };
     }
-    if (std.mem.indexOfPos(u8, text, 0, "x=") == null or
-        std.mem.indexOfPos(u8, text, 0, "y=") == null) return null;
-    const x = blk: {
-        const pos = (std.mem.indexOfPos(u8, text, 0, "x=") orelse return null) + 2;
-        var end = pos;
-        while (end < text.len and text[end] != ' ') end += 1;
-        break :blk std.fmt.parseFloat(f64, text[pos..end]) catch return null;
-    };
-    const y = blk: {
-        const pos = (std.mem.indexOfPos(u8, text, 0, "y=") orelse return null) + 2;
-        var end = pos;
-        while (end < text.len and text[end] != ' ') end += 1;
-        break :blk std.fmt.parseFloat(f64, text[pos..end]) catch return null;
-    };
-    const range = blk: {
-        const pos = (std.mem.indexOfPos(u8, text, 0, "range=") orelse return null) + 6;
-        var end = pos;
-        while (end < text.len and text[end] != ' ') end += 1;
-        break :blk std.fmt.parseFloat(f64, text[pos..end]) catch return null;
-    };
-    const iters = blk: {
-        const pos = (std.mem.indexOfPos(u8, text, 0, "iters=") orelse return null) + 6;
-        var end = pos;
-        while (end < text.len and text[end] >= '0' and text[end] <= '9') end += 1;
-        break :blk std.fmt.parseInt(u32, text[pos..end], 10) catch return null;
-    };
+    const x_str = parseField(text, "x=") orelse return null;
+    const y_str = parseField(text, "y=") orelse return null;
+    const range_str = parseField(text, "range=") orelse return null;
+    const iters_str = parseField(text, "iters=") orelse return null;
+    const x = std.fmt.parseFloat(f64, x_str) catch return null;
+    const y = std.fmt.parseFloat(f64, y_str) catch return null;
+    const range = std.fmt.parseFloat(f64, range_str) catch return null;
+    const iters = std.fmt.parseInt(u32, iters_str, 10) catch return null;
     return m.ViewState{ .center_x = x, .center_y = y, .range = range, .max_iters = iters };
 }
 
@@ -306,14 +276,17 @@ pub const App = struct {
     texture: rl.Texture2D,
     drag: DragState,
     anim: ZoomAnimation,
-    anim_pixels: ?[]u8,
     anim_texture: ?rl.Texture2D,
-    anim_image: ?rl.Image,
     highlight: HighlightRect,
     tb_buf: TextBuf,
     tb_active: bool,
     rows_completed: ?[]bool,
     ui_font: rl.Font,
+    btn_w_inc: f32,
+    btn_w_dec: f32,
+    btn_w_copy: f32,
+    btn_w_paste: f32,
+    btn_w_reset: f32,
 
     pub fn init(render_method: m.RenderMethod) !App {
         m.buildPalette();
@@ -354,14 +327,17 @@ pub const App = struct {
                 .duration = 0,
                 .active = false,
             },
-            .anim_pixels = null,
             .anim_texture = null,
-            .anim_image = null,
             .highlight = HighlightRect{ .x = 0, .y = 0, .w = 0, .h = 0, .start_time = 0, .active = false },
             .tb_buf = TextBuf.init(),
             .tb_active = false,
             .rows_completed = null,
             .ui_font = rl.getFontDefault() catch unreachable,
+            .btn_w_inc = undefined,
+            .btn_w_dec = undefined,
+            .btn_w_copy = undefined,
+            .btn_w_paste = undefined,
+            .btn_w_reset = undefined,
         };
 
         {
@@ -385,6 +361,11 @@ pub const App = struct {
         }
 
         rl.setTextureFilter(app.texture, .point);
+        app.btn_w_inc = rl.measureTextEx(app.ui_font, "inc", @floatFromInt(FONT_SIZE_BTN), 0).x;
+        app.btn_w_dec = rl.measureTextEx(app.ui_font, "dec", @floatFromInt(FONT_SIZE_BTN), 0).x;
+        app.btn_w_copy = rl.measureTextEx(app.ui_font, "copy", @floatFromInt(FONT_SIZE_BTN), 0).x;
+        app.btn_w_paste = rl.measureTextEx(app.ui_font, "paste", @floatFromInt(FONT_SIZE_BTN), 0).x;
+        app.btn_w_reset = rl.measureTextEx(app.ui_font, "reset", @floatFromInt(FONT_SIZE_BTN), 0).x;
         app.syncTextBox();
         logEvent(.app, "init {d}x{d} dpi={d} method={s}", .{ rw, rh, dpi, @tagName(render_method) });
         return app;
@@ -392,18 +373,6 @@ pub const App = struct {
 
     pub fn cancelAnimation(self: *App) void {
         self.anim.active = false;
-        if (self.anim_texture) |tex| {
-            rl.unloadTexture(tex);
-            self.anim_texture = null;
-        }
-        if (self.anim_image) |img| {
-            rl.unloadImage(img);
-            self.anim_image = null;
-        }
-        if (self.anim_pixels) |pixels| {
-            std.heap.page_allocator.free(pixels);
-            self.anim_pixels = null;
-        }
     }
 
     fn viewportRect(self: *const App) rl.Rectangle {
@@ -425,20 +394,33 @@ pub const App = struct {
 
     fn captureAnimationFrame(self: *App) !void {
         const px_size: usize = @intCast(self.image.width * self.image.height * PIXEL_CHANNELS);
-        const old_pixels = try std.heap.page_allocator.alloc(u8, px_size);
-        @memcpy(old_pixels, self.pixelData());
-        self.anim_pixels = old_pixels;
+        const pixels = try std.heap.page_allocator.alloc(u8, px_size);
+        defer std.heap.page_allocator.free(pixels);
+        @memcpy(pixels, self.pixelData());
 
-        const img = rl.genImageColor(self.image.width, self.image.height, .black);
-        const img_pixels = @as([*]u8, @ptrCast(img.data))[0..px_size];
-        @memcpy(img_pixels, old_pixels);
-        self.anim_image = img;
+        if (self.anim_texture) |tex| {
+            if (tex.width == self.image.width and tex.height == self.image.height) {
+                rl.updateTexture(tex, @ptrCast(pixels));
+                return;
+            }
+            rl.unloadTexture(tex);
+        }
+
+        const img = rl.Image{
+            .data = @ptrCast(pixels),
+            .width = self.image.width,
+            .height = self.image.height,
+            .mipmaps = 1,
+            .format = .uncompressed_r8g8b8a8,
+        };
         self.anim_texture = try rl.loadTextureFromImage(img);
+        rl.setTextureFilter(self.anim_texture.?, .point);
     }
 
     pub fn deinit(self: *App) void {
         logEvent(.app, "shutdown", .{});
         self.cancelAnimation();
+        if (self.anim_texture) |tex| rl.unloadTexture(tex);
         for (0..self.history_len) |i| {
             if (self.history[i].pixels.len > 0)
                 std.heap.page_allocator.free(self.history[i].pixels);
@@ -494,6 +476,23 @@ pub const App = struct {
         );
     }
 
+    fn setupZoomOutHighlight(self: *App, from_view: m.ViewState, to_view: m.ViewState) void {
+        const aspect = self.viewportAspect();
+        const vph = self.viewportDrawHeight();
+        const draw_w: f32 = @floatFromInt(self.render_w);
+        const draw_h: f32 = @floatFromInt(vph);
+        const from_left = from_view.center_x - from_view.range / 2.0;
+        const from_top = from_view.center_y - from_view.range / (2.0 * aspect);
+        const to_left = to_view.center_x - to_view.range / 2.0;
+        const to_top = to_view.center_y - to_view.range / (2.0 * aspect);
+        self.highlight.x = @floatCast((from_left - to_left) / to_view.range * draw_w);
+        self.highlight.y = @floatCast((from_top - to_top) / (to_view.range / aspect) * draw_h + @as(f32, @floatFromInt(TOTAL_TOP)));
+        self.highlight.w = @floatCast(from_view.range / to_view.range * draw_w);
+        self.highlight.h = @floatCast(from_view.range / to_view.range * draw_h);
+        self.highlight.start_time = rl.getTime();
+        self.highlight.active = true;
+    }
+
     fn startZoomAnimation(self: *App, to_entry: *const HistoryEntry) !void {
         self.cancelAnimation();
 
@@ -501,23 +500,7 @@ pub const App = struct {
         const to_view = to_entry.view;
 
         if (to_view.range > from_view.range) {
-            const aspect = self.viewportAspect();
-            const vph = self.viewportDrawHeight();
-            const draw_w: f32 = @floatFromInt(self.render_w);
-            const draw_h: f32 = @floatFromInt(vph);
-
-            const from_left = from_view.center_x - from_view.range / 2.0;
-            const from_top = from_view.center_y - from_view.range / (2.0 * aspect);
-
-            const to_left = to_view.center_x - to_view.range / 2.0;
-            const to_top = to_view.center_y - to_view.range / (2.0 * aspect);
-
-            self.highlight.x = @floatCast((from_left - to_left) / to_view.range * draw_w);
-            self.highlight.y = @floatCast((from_top - to_top) / (to_view.range / aspect) * draw_h + @as(f32, @floatFromInt(TOTAL_TOP)));
-            self.highlight.w = @floatCast(from_view.range / to_view.range * draw_w);
-            self.highlight.h = @floatCast(from_view.range / to_view.range * draw_h);
-            self.highlight.start_time = rl.getTime();
-            self.highlight.active = true;
+            self.setupZoomOutHighlight(from_view, to_view);
         } else {
             self.highlight.active = false;
         }
@@ -672,6 +655,10 @@ pub const App = struct {
         const new_h = rl.getScreenHeight();
         if (new_w == self.screen_w and new_h == self.screen_h) return;
         self.cancelAnimation();
+        if (self.anim_texture) |tex| {
+            rl.unloadTexture(tex);
+            self.anim_texture = null;
+        }
         if (self.rows_completed) |rc| {
             std.heap.page_allocator.free(rc);
             self.rows_completed = null;
@@ -907,6 +894,21 @@ pub const App = struct {
         self.syncTextBox();
     }
 
+    fn drawToolbarButton(self: *const App, x: i32, w: i32, label: [:0]const u8, label_w: f32, btn_y: i32, btn_h: i32, mx: i32, my: i32) void {
+        const hover = mx >= x and mx < x + w and my >= btn_y and my < btn_y + btn_h;
+        rl.drawRectangle(x, btn_y, w, btn_h, if (hover) COL_BTN_BG_HOVER else COL_BTN_BG);
+        rl.drawRectangleLines(x, btn_y, w, btn_h, COL_BTN_BORDER);
+        const cx = @as(f32, @floatFromInt(x)) + (@as(f32, @floatFromInt(w)) - label_w) / 2.0;
+        rl.drawTextEx(self.ui_font, label, .{ .x = cx, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
+    }
+
+    fn drawToolbarArrow(self: *const App, x: i32, cp: i32, btn_y: i32, btn_h: i32, mx: i32, my: i32) void {
+        const hover = mx >= x and mx < x + BTN_ARROW and my >= btn_y and my < btn_y + btn_h;
+        rl.drawRectangle(x, btn_y, BTN_ARROW, btn_h, if (hover) COL_BTN_BG_HOVER else COL_BTN_BG);
+        rl.drawRectangleLines(x, btn_y, BTN_ARROW, btn_h, COL_BTN_BORDER);
+        rl.drawTextCodepoint(self.ui_font, cp, .{ .x = @floatFromInt(x + ARROW_PAD_X), .y = @floatFromInt(btn_y + ARROW_PAD_Y) }, FONT_SIZE_ARROW, COL_BTN_TEXT);
+    }
+
     pub fn drawFrame(self: *App) void {
         rl.beginDrawing();
         defer rl.endDrawing();
@@ -955,67 +957,13 @@ pub const App = struct {
             }
         }
 
-        const btn_colors = struct {
-            fn bg(hover: bool) rl.Color {
-                return if (hover) COL_BTN_BG_HOVER else COL_BTN_BG;
-            }
-            fn border() rl.Color {
-                return COL_BTN_BORDER;
-            }
-        };
-
-        {
-            const hover = mx >= tb.arrow_l_x and mx < tb.arrow_l_x + BTN_ARROW and my >= btn_y and my < btn_y + btn_h;
-            rl.drawRectangle(tb.arrow_l_x, btn_y, BTN_ARROW, btn_h, btn_colors.bg(hover));
-            rl.drawRectangleLines(tb.arrow_l_x, btn_y, BTN_ARROW, btn_h, btn_colors.border());
-            rl.drawTextCodepoint(self.ui_font, CP_ARROW_LEFT, .{ .x = @floatFromInt(tb.arrow_l_x + ARROW_PAD_X), .y = @floatFromInt(btn_y + ARROW_PAD_Y) }, FONT_SIZE_ARROW, COL_BTN_TEXT);
-        }
-        {
-            const hover = mx >= tb.arrow_r_x and mx < tb.arrow_r_x + BTN_ARROW and my >= btn_y and my < btn_y + btn_h;
-            rl.drawRectangle(tb.arrow_r_x, btn_y, BTN_ARROW, btn_h, btn_colors.bg(hover));
-            rl.drawRectangleLines(tb.arrow_r_x, btn_y, BTN_ARROW, btn_h, btn_colors.border());
-            rl.drawTextCodepoint(self.ui_font, CP_ARROW_RIGHT, .{ .x = @floatFromInt(tb.arrow_r_x + ARROW_PAD_X), .y = @floatFromInt(btn_y + ARROW_PAD_Y) }, FONT_SIZE_ARROW, COL_BTN_TEXT);
-        }
-        {
-            const hover = mx >= tb.inc_x and mx < tb.inc_x + BTN_ITER and my >= btn_y and my < btn_y + btn_h;
-            rl.drawRectangle(tb.inc_x, btn_y, BTN_ITER, btn_h, btn_colors.bg(hover));
-            rl.drawRectangleLines(tb.inc_x, btn_y, BTN_ITER, btn_h, btn_colors.border());
-            const label = "inc";
-            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
-            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(tb.inc_x)) + (@as(f32, @floatFromInt(BTN_ITER)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
-        }
-        {
-            const hover = mx >= tb.dec_x and mx < tb.dec_x + BTN_ITER and my >= btn_y and my < btn_y + btn_h;
-            rl.drawRectangle(tb.dec_x, btn_y, BTN_ITER, btn_h, btn_colors.bg(hover));
-            rl.drawRectangleLines(tb.dec_x, btn_y, BTN_ITER, btn_h, btn_colors.border());
-            const label = "dec";
-            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
-            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(tb.dec_x)) + (@as(f32, @floatFromInt(BTN_ITER)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
-        }
-        {
-            const hover = mx >= tb.copy_x and mx < tb.copy_x + BTN_LG and my >= btn_y and my < btn_y + btn_h;
-            rl.drawRectangle(tb.copy_x, btn_y, BTN_LG, btn_h, btn_colors.bg(hover));
-            rl.drawRectangleLines(tb.copy_x, btn_y, BTN_LG, btn_h, btn_colors.border());
-            const label = "copy";
-            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
-            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(tb.copy_x)) + (@as(f32, @floatFromInt(BTN_LG)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
-        }
-        {
-            const hover = mx >= tb.paste_x and mx < tb.paste_x + BTN_LG and my >= btn_y and my < btn_y + btn_h;
-            rl.drawRectangle(tb.paste_x, btn_y, BTN_LG, btn_h, btn_colors.bg(hover));
-            rl.drawRectangleLines(tb.paste_x, btn_y, BTN_LG, btn_h, btn_colors.border());
-            const label = "paste";
-            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
-            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(tb.paste_x)) + (@as(f32, @floatFromInt(BTN_LG)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
-        }
-        {
-            const hover = mx >= tb.reset_x and mx < tb.reset_x + BTN_RESET and my >= btn_y and my < btn_y + btn_h;
-            rl.drawRectangle(tb.reset_x, btn_y, BTN_RESET, btn_h, btn_colors.bg(hover));
-            rl.drawRectangleLines(tb.reset_x, btn_y, BTN_RESET, btn_h, btn_colors.border());
-            const label = "reset";
-            const lw = rl.measureTextEx(self.ui_font, label, @floatFromInt(FONT_SIZE_BTN), 0);
-            rl.drawTextEx(self.ui_font, label, .{ .x = @as(f32, @floatFromInt(tb.reset_x)) + (@as(f32, @floatFromInt(BTN_RESET)) - lw.x) / 2.0, .y = @floatFromInt(btn_y + BTN_TEXT_PAD_Y) }, @floatFromInt(FONT_SIZE_BTN), 0, COL_BTN_TEXT);
-        }
+        self.drawToolbarArrow(tb.arrow_l_x, CP_ARROW_LEFT, btn_y, btn_h, mx, my);
+        self.drawToolbarArrow(tb.arrow_r_x, CP_ARROW_RIGHT, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.inc_x, BTN_ITER, "inc", self.btn_w_inc, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.dec_x, BTN_ITER, "dec", self.btn_w_dec, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.copy_x, BTN_LG, "copy", self.btn_w_copy, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.paste_x, BTN_LG, "paste", self.btn_w_paste, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.reset_x, BTN_RESET, "reset", self.btn_w_reset, btn_y, btn_h, mx, my);
 
         if (self.drag.active) {
             const x0: f32 = @floatCast(@min(self.drag.start_x, self.drag.current_x));
