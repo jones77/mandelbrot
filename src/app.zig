@@ -782,6 +782,14 @@ pub const App = struct {
                     try self.resetView();
                     tb_click_consumed = true;
                 }
+                // Second line: tooltip checkbox toggle
+                if (my >= LINE1_H and my < TOTAL_TOP) {
+                    const chk_x = self.render_w - TOP_PAD - @as(i32, @intFromFloat(self.tooltip_label_w));
+                    if (mx >= chk_x and mx < self.render_w - TOP_PAD) {
+                        self.tooltip_enabled = !self.tooltip_enabled;
+                        tb_click_consumed = true;
+                    }
+                }
             }
         }
 
@@ -1018,6 +1026,18 @@ pub const App = struct {
         }
 
         self.drawHighlight();
+
+        // Tooltip checkbox — right-aligned on second line
+        {
+            const chk_label = if (self.tooltip_enabled) TOOLTIP_LABEL else TOOLTIP_LABEL_OFF;
+            const chk_w = self.tooltip_label_w;
+            const chk_x = @as(f32, @floatFromInt(self.render_w)) - @as(f32, @floatFromInt(TOP_PAD)) - chk_w;
+            const chk_y = @as(f32, @floatFromInt(LINE1_H)) + @as(f32, @floatFromInt(HINT_PAD_Y));
+            const hover = @as(f32, @floatFromInt(mx)) >= chk_x and @as(f32, @floatFromInt(mx)) < chk_x + chk_w and
+                my >= LINE1_H + HINT_PAD_Y and my < LINE1_H + HINT_PAD_Y + @as(i32, @intFromFloat(FONT_SIZE_LG));
+            rl.drawTextEx(self.ui_font, chk_label, .{ .x = chk_x, .y = chk_y }, FONT_SIZE_LG, 1,
+                if (hover) COL_TEXT else COL_HINT);
+        }
 
         if (self.render_timed_out) {
             const msg = "[Space]: continue";
