@@ -27,9 +27,67 @@ Do not fetch full page without asking (~135k tokens).
 ```
 zig fetch --save git+https://github.com/raylib-zig/raylib-zig#v5.6-dev  # once
 zig build run      # run app
-zig build test     # full suite
-zig build unit     # 37 pure-math tests, no raylib, prints output
+zig build test     # full suite — all test blocks in main.zig's module tree
+zig build unit     # 60 pure-math tests (mandelbrot.zig + util.zig), no raylib
 ```
+
+## Critical architecture: pixel-center convention
+
+**The renderer uses pixel-center sampling.** Every pixel-to-complex mapping
+must use this formula:
+
+```
+cx = left + (px + 0.5) * range_x / w
+cy = top  + (py + 0.5) * range_y / h
+```
+
+This is the standard convention in Mandelbrot explorers — each pixel samples
+the centre of its cell, and the w×h cells evenly cover `[left, right] × [top, bottom]`.
+
+**Common mistake:** using `px * range_x / w` (left-edge) or `px * range_x / (w-1)`
+changes the centering by ~0.5px. These produce *visible* artifacts at the set
+boundary even though every pixel is still "correctly" classified for the sampled
+coordinate. The ground-truth tests in `integration_tests.zig` use the same
+pixel-center formula, so they only verify self-consistency — they cannot catch
+formula errors.
+
+**Invariant to enforce:** the mapping must satisfy:
+- Pixel 0 samples at `left + 0.5 * step_x` (half step inside the left edge)
+- Pixel `w-1` samples at `right - 0.5 * step_x` (half step before the right edge)
+- Adjacent pixels are exactly `step_x = range_x / w` apart
+
+See `test "pixel-center mapping invariant"` in `integration_tests.zig`.
+
+## Integration tests
+
+`src/integration_tests.zig` contains 8 image-based tests that need raylib
+(for Image allocation). They are included in `zig build test` via the import
+in `main.zig`. The test helpers (`expectPixelBlack`, `countNonBlack`, etc.)
+are in this file.
+
+Key tests for regression detection:
+- **default view renders** — baseline: auto, f64, perturbation paths
+- **cross-algorithm classification** — all 3 methods agree on every pixel
+- **golden pixel (WellKnown)** — pre-verified coordinates match renderer
+- **ground truth at 128 / 2048 iters** — every pixel vs independent f64
+- **pixel-center mapping invariant** — geometry of the mapping formula
+- **deep zoom smoke** — perturbation + f64 fallback at Seahorse Valley
+- **timeout** — custom atomic clock, verifies partial render
+
+## Debugging notes
+
+### Ground-truth tests prove self-consistency, not correctness
+The ground-truth tests (`groundTruthInterior` + renderer comparison) use the
+SAME pixel-to-complex formula as the renderer. If the formula is wrong, both
+agree on the wrong answer. To catch formula errors, use mapping invariants
+(see pixel-center section above).
+
+### How the pixel-mapping bug was found
+The user reported a "thick black line along the real axis" that other
+Mandelbrot explorers didn't show. The working commit f678ecc was identified
+and compared against HEAD. Bisecting narrowed it to the divisor change
+(`w-1` → `w`) in 440c813. Neither divisor was correct — the fix was pixel
+centers: `(px + 0.5) * range_x / w` (commit 0ef123a).
 
 ## Release process
 

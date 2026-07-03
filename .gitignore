@@ -2,5 +2,6 @@ zig-pkg/
 .zig-cache/
 zig-out/
 Session.vim
+*.png
 *.sw[op]
 *.tar.gz
