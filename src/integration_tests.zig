@@ -258,3 +258,42 @@ test "deep zoom render produces valid output" {
     // At least one colored (exterior) pixel exists.
     try testing.expect(non_black > 0);
 }
+
+var timeout_clock_calls: u32 = 0;
+
+fn timeoutTestClock() f64 {
+    timeout_clock_calls += 1;
+    // Stay at 0 for first 10 calls so those row-checks pass,
+    // then jump far past deadline to trigger timeout.
+    if (timeout_clock_calls <= 10) return 0.0;
+    return 100.0;
+}
+
+test "renderer reports timeout with short deadline" {
+    m.buildPalette();
+
+    const w: i32 = 64;
+    const h: i32 = 64;
+    const view = m.ViewState{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE,
+        .max_iters = 65536,
+    };
+
+    timeout_clock_calls = 0;
+
+    const img = rl.genImageColor(w, h, .black);
+    defer rl.unloadImage(img);
+
+    const pixels = @as([*]u8, @ptrCast(img.data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+    const timed_out = try renderer.renderMandelbrot(pixels, @intCast(w), @intCast(h), view, true, 0.001, timeoutTestClock, null);
+    try testing.expect(timed_out);
+
+    const total = @as(usize, @intCast(w * h));
+    const non_black = countNonBlack(pixels);
+    // At least one row was rendered before timeout.
+    try testing.expect(non_black > 0);
+    // Not all rows were rendered.
+    try testing.expect(non_black < total);
+}
