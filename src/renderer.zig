@@ -57,6 +57,11 @@ fn renderStrip(ctx: *RenderStrip) void {
             return;
         }
 
+        // Pixel-center convention: each pixel samples the centre of its cell.
+        //   cx = left + (px + 0.5) * range_x / w
+        //   cy = top  + (py + 0.5) * range_y / h
+        // This is the standard in Mandelbrot explorers — the image evenly
+        // covers [left, right] × [top, bottom] with w×h cells.
         const cy_f64 = cfg.top + (@as(f64, @floatFromInt(py)) + 0.5) * cfg.range_y / @as(f64, @floatFromInt(h));
         const cy: f32 = @floatCast(cy_f64);
         const cy2 = cy * cy;
@@ -73,6 +78,7 @@ fn renderStrip(ctx: *RenderStrip) void {
             const pix_idx = (py * w + px) * PIXEL_CHANNELS;
 
             // Path selection: perturbation (if useful and available) > f64 (if ref exists or deep zoom) > f32 standard.
+            // Pixel-centre convention used in all paths — see comment above.
             const mu: f32 = if (cfg.use_perturbation) blk: {
                 const orbit = cfg.ref_orbit.?;
                 const dcx = (@as(f64, @floatFromInt(px)) + 0.5) * cfg.range_x / @as(f64, @floatFromInt(w)) - 0.5 * cfg.range_x + cfg.offset_x;
