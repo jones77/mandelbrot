@@ -27,7 +27,12 @@ pub fn main(init: std.process.Init) !void {
     try a.saveSnapshot();
 
     // Drain stale input events accumulated during init/rendering so the
-    // main loop starts with a clean input state.
+    // main loop starts with a clean input state.  We poll twice: the first
+    // call loads stale events into currentKeyState; the second copies those
+    // into previousKeyState so isKeyPressed() never sees a 0→1 transition
+    // for stale events.
+    rl.pollInputEvents();
+    rl.pollInputEvents();
     while (rl.getKeyPressed() != .null) {}
     while (rl.getCharPressed() != 0) {}
 
