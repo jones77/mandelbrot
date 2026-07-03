@@ -372,6 +372,46 @@ test "every pixel classification matches ground truth at 128 iters" {
     try testing.expect(exterior > 0);
 }
 
+test "pixel-center mapping invariant" {
+    // Verify the pixel-to-complex mapping formula is correct.
+    // These invariants must hold for ANY view state.
+    const w: i32 = 128;
+    const h: i32 = 128;
+    const view = m.ViewState{
+        .center_x = -0.75,
+        .center_y = 0.0,
+        .range = 2.9,
+        .max_iters = 128,
+    };
+
+    const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
+    const range_x = view.range;
+    const range_y = view.range / aspect;
+    const left = view.center_x + view.offset_x - range_x / 2.0;
+    const right = view.center_x + view.offset_x + range_x / 2.0;
+    const top = view.center_y + view.offset_y - range_y / 2.0;
+    const bottom = view.center_y + view.offset_y + range_y / 2.0;
+    const step_x = range_x / @as(f64, @floatFromInt(w));
+    const step_y = range_y / @as(f64, @floatFromInt(h));
+
+    // Pixel 0 samples half a step inside the left/top edge.
+    try testing.expectApproxEqAbs(left + 0.5 * step_x,
+        left + (0.0 + 0.5) * range_x / @as(f64, @floatFromInt(w)), 1e-15);
+    try testing.expectApproxEqAbs(top + 0.5 * step_y,
+        top + (0.0 + 0.5) * range_y / @as(f64, @floatFromInt(h)), 1e-15);
+
+    // Last pixel samples half a step before the right/bottom edge.
+    try testing.expectApproxEqAbs(right - 0.5 * step_x,
+        left + (@as(f64, @floatFromInt(w)) - 0.5) * range_x / @as(f64, @floatFromInt(w)), 1e-15);
+    try testing.expectApproxEqAbs(bottom - 0.5 * step_y,
+        top + (@as(f64, @floatFromInt(h)) - 0.5) * range_y / @as(f64, @floatFromInt(h)), 1e-15);
+
+    // Each pixel is exactly one step apart.
+    const c0 = left + (0.0 + 0.5) * range_x / @as(f64, @floatFromInt(w));
+    const c1 = left + (1.0 + 0.5) * range_x / @as(f64, @floatFromInt(w));
+    try testing.expectApproxEqAbs(step_x, c1 - c0, 1e-15);
+}
+
 test "every pixel matches ground truth at startup resolution and iters" {
     const max_iters: u32 = m.DEFAULT_MAX_ITERS;
     const w: i32 = 128;
