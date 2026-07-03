@@ -16,9 +16,9 @@ Follow `lib/std/*.zig` conventions. Key exemplars to read for patterns:
 
 ## References
 
-[Chéritat](https://www.math.univ-toulouse.fr/~cheritat/wiki-draw/index.php/Mandelbrot_set)
-— visualisation modes (Sections 3.1–3.6). Summary at `cheritat-algorithms.md`.
-Do not fetch full page without asking (~135k tokens).
+Use the local summary at `cheritat-algorithms.md` for algorithm reference.
+Do NOT fetch the Chéritat website — the local file covers all needed content
+(Sections 3.1–3.6).
 
 [Heiland-Allen](https://mathr.co.uk/blog/2022-11-19_cardioid_and_bulb_checking.html)
 — cardioid/bulb bounding-box optimisation.
