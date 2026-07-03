@@ -3,8 +3,9 @@
 ## Project context
 
 Interactive Mandelbrot viewer in Zig 0.16 + raylib (via raylib-zig v5.6-dev).
-Four source files: `main.zig` (entry), `app.zig` (UI/history/clipboard),
-`renderer.zig` (multi-threaded rendering), `mandelbrot.zig` (pure math + tests).
+Six source files: `main.zig` (entry), `app.zig` (UI/history/clipboard),
+`renderer.zig` (multi-threaded rendering), `mandelbrot.zig` (pure math + tests),
+`pixel.zig` (pixel format constants), `log.zig` (timestamping & structured logging).
 
 ## Zig conventions
 
@@ -22,13 +23,20 @@ Do not fetch full page without asking (~135k tokens).
 [Heiland-Allen](https://mathr.co.uk/blog/2022-11-19_cardioid_and_bulb_checking.html)
 — cardioid/bulb bounding-box optimisation.
 
+## Naming conventions
+
+**Do not create files or directories named `util`, `utils`, or `utilities`.**
+Every file and directory must describe what the code inside *does* (e.g.
+`pixel.zig` for pixel format constants, `log.zig` for structured logging).
+Names like "utils" are too vague to convey purpose and encourage bloat.
+
 ## Build & test
 
 ```
 zig fetch --save git+https://github.com/raylib-zig/raylib-zig#v5.6-dev  # once
 zig build run      # run app
 zig build test     # full suite — all test blocks in main.zig's module tree
-zig build unit     # 60 pure-math tests (mandelbrot.zig + util.zig), no raylib
+zig build unit     # 58 pure-math tests (mandelbrot.zig), no raylib
 ```
 
 ## Critical architecture: pixel-center convention

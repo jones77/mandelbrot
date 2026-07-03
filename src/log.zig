@@ -1,9 +1,9 @@
 const std = @import("std");
 
-pub const PIXEL_CHANNELS: u32 = 4;
-
 extern "c" fn clock_gettime(clock_id: c_int, tp: *std.c.timespec) c_int;
 
+/// Format the current UTC time as an ISO 8601 basic timestamp.
+/// `buf` must be at least 24 bytes. Returns a slice of `buf` of length 24.
 pub fn isoNow(buf: []u8) []u8 {
     var ts: std.c.timespec = undefined;
     _ = clock_gettime(@intFromEnum(std.c.CLOCK.REALTIME), &ts);
@@ -25,6 +25,7 @@ pub fn isoNow(buf: []u8) []u8 {
     }) catch unreachable;
 }
 
+/// Log a structured event to stderr with an ISO 8601 timestamp.
 pub fn logEvent(comptime scope: anytype, comptime fmt: []const u8, args: anytype) void {
     var ts_buf: [24]u8 = undefined;
     const ts = isoNow(&ts_buf);
@@ -48,5 +49,3 @@ test "isoNow format" {
     try testing.expectEqual(@as(u8, ':'), ts[16]);
     try testing.expectEqual(@as(u8, '.'), ts[19]);
 }
-
-

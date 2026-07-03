@@ -1644,20 +1644,6 @@ test "isCardioidOrBulb classifies known points" {
     try testing.expect(!isCardioidOrBulb(-1.5, 0.5));
 }
 
-test "isoNow format matches ISO 8601" {
-    const util = @import("util.zig");
-    var buf: [24]u8 = undefined;
-    const ts = util.isoNow(&buf);
-    try testing.expectEqual(@as(usize, 24), ts.len);
-    try testing.expectEqual(@as(u8, 'T'), ts[10]);
-    try testing.expectEqual(@as(u8, 'Z'), ts[23]);
-    try testing.expectEqual(@as(u8, '-'), ts[4]);
-    try testing.expectEqual(@as(u8, '-'), ts[7]);
-    try testing.expectEqual(@as(u8, ':'), ts[13]);
-    try testing.expectEqual(@as(u8, ':'), ts[16]);
-    try testing.expectEqual(@as(u8, '.'), ts[19]);
-}
-
 test "glitch detection converges to ground truth at Seahorse Valley" {
     // Verify renderPerturbationPixel with both glitch_ratio=0 and
     // glitch_ratio=GLITCH_RATIO against groundTruthPixel at a deep zoom

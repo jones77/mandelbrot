@@ -1,7 +1,7 @@
 const std = @import("std");
 const m = @import("mandelbrot.zig");
-const PIXEL_CHANNELS = @import("util.zig").PIXEL_CHANNELS;
-const isoNow = @import("util.zig").isoNow;
+const PIXEL_CHANNELS = @import("pixel.zig").PIXEL_CHANNELS;
+const isoNow = @import("log.zig").isoNow;
 
 const MAX_RENDER_THREADS: usize = 8;
 const MIN_ROWS_PER_THREAD: usize = 32;

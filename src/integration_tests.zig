@@ -2,7 +2,7 @@ const std = @import("std");
 const rl = @import("raylib");
 const m = @import("mandelbrot.zig");
 const renderer = @import("renderer.zig");
-const PIXEL_CHANNELS = @import("util.zig").PIXEL_CHANNELS;
+const PIXEL_CHANNELS = @import("pixel.zig").PIXEL_CHANNELS;
 
 // ===========================================================================
 // Integration tests (need raylib for Image allocation)
