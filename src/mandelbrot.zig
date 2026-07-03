@@ -533,6 +533,7 @@ pub fn nextPowerOf2(n: u32) u32 {
 /// Returns true when the renderer should use f64 rebaseFallback instead of
 /// f32 standardPixel.  .f64 mode forces f64; .auto uses f64 when the pixel
 /// step is below the precision threshold or when max_iters exceeds f32 range.
+/// Returns false for .perturbation — that path handles itself.
 pub fn shouldUseF64Fallback(render_method: RenderMethod, pixel_step: f64, max_iters: u32) bool {
     return render_method == .f64 or
         (render_method == .auto and pixel_step < PIXEL_STEP_F64_THRESHOLD) or

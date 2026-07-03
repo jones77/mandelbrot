@@ -146,6 +146,10 @@ pub fn renderMandelbrot(
         null;
     defer if (ref_orbit) |orbit| std.heap.page_allocator.free(orbit);
 
+    // Only use perturbation when the reference actually escaped (|Z| grows
+    // without bound). Using it with a non-escaped (interior) reference
+    // produces incorrect results because perturbation assumes |Z| diverges.
+    // .perturbation mode forces perturbation regardless of escape status.
     const use_perturbation = if (ref_orbit) |orbit| blk: {
         const last = orbit[orbit.len - 1];
         const norm_sq = last.zx * last.zx + last.zy * last.zy;
