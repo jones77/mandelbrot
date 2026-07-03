@@ -88,6 +88,19 @@ test "default view renders with colored exterior pixels" {
             },
             .min_exterior_pct = 30,
         },
+        .{
+            .label = "64x64 perturbation",
+            .w = 64,
+            .h = 64,
+            .view = .{
+                .center_x = m.INITIAL_CENTER_X,
+                .center_y = m.INITIAL_CENTER_Y,
+                .range = m.INITIAL_RANGE,
+                .max_iters = m.DEFAULT_MAX_ITERS,
+                .render_method = .perturbation,
+            },
+            .min_exterior_pct = 30,
+        },
     };
 
     for (cases) |c| {
