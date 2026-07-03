@@ -1,7 +1,7 @@
 const std = @import("std");
 const rl = @import("raylib");
 const app = @import("app.zig");
-const PIXEL_CHANNELS = @import("util.zig").PIXEL_CHANNELS;
+const PIXEL_CHANNELS = @import("pixel.zig").PIXEL_CHANNELS;
 const m = @import("mandelbrot.zig");
 const renderer = @import("renderer.zig");
 const _ = @import("integration_tests.zig");
@@ -17,8 +17,9 @@ pub fn main(init: std.process.Init) !void {
     rl.setTargetFPS(TARGET_FPS);
 
     const render_method = parseMethodArg(init.minimal.args) orelse .auto;
+    const tooltip_enabled = parseTooltipArg(init.minimal.args);
 
-    var a = try app.App.init(render_method);
+    var a = try app.App.init(render_method, tooltip_enabled);
     defer a.deinit();
 
     // Initial render.
@@ -46,6 +47,16 @@ fn parseMethodArg(args: std.process.Args) ?m.RenderMethod {
         }
     }
     return null;
+}
+
+fn parseTooltipArg(args: std.process.Args) bool {
+    var it = args.iterate();
+    _ = it.next() orelse return true;
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--no-tooltip")) return false;
+        if (std.mem.eql(u8, arg, "--tooltip")) return true;
+    }
+    return true;
 }
 
 

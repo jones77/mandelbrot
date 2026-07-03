@@ -2,8 +2,8 @@ const std = @import("std");
 const rl = @import("raylib");
 const m = @import("mandelbrot.zig");
 const renderer = @import("renderer.zig");
-const logEvent = @import("util.zig").logEvent;
-const PIXEL_CHANNELS = @import("util.zig").PIXEL_CHANNELS;
+const logEvent = @import("log.zig").logEvent;
+const PIXEL_CHANNELS = @import("pixel.zig").PIXEL_CHANNELS;
 
 const DEFAULT_W: i32 = 900;
 const DEFAULT_H: i32 = 800;
@@ -67,6 +67,15 @@ const ASCII_PRN_MAX: i32 = 126;
 const ASCII_PRN_COUNT = ASCII_PRN_MAX - ASCII_PRN_MIN + 1;
 const CP_ARROW_LEFT: i32 = 0x2190;
 const CP_ARROW_RIGHT: i32 = 0x2192;
+
+const TOOLTIP_LABEL = "[x] tooltip";
+const TOOLTIP_LABEL_OFF = "[ ] tooltip";
+const TOOLTIP_DELAY_S: f64 = 2.0;
+const TOOLTIP_MOVE_THRESHOLD_PX: i32 = 2;
+const TOOLTIP_OFFSET_X: i32 = 12;
+const TOOLTIP_OFFSET_Y: i32 = 12;
+const TOOLTIP_PAD_X: i32 = 8;
+const TOOLTIP_PAD_Y: i32 = 4;
 
 const TextBuf = struct {
     buf: [TB_CAP + 1]u8,
@@ -288,8 +297,13 @@ pub const App = struct {
     btn_w_copy: f32,
     btn_w_paste: f32,
     btn_w_reset: f32,
+    tooltip_enabled: bool,
+    tooltip_label_w: f32,
+    tooltip_mouse_still_since: f64,
+    tooltip_last_mx: i32,
+    tooltip_last_my: i32,
 
-    pub fn init(render_method: m.RenderMethod) !App {
+    pub fn init(render_method: m.RenderMethod, tooltip_enabled: bool) !App {
         m.buildPalette();
         const sw = rl.getScreenWidth();
         const sh = rl.getScreenHeight();
@@ -339,6 +353,11 @@ pub const App = struct {
             .btn_w_copy = undefined,
             .btn_w_paste = undefined,
             .btn_w_reset = undefined,
+            .tooltip_enabled = tooltip_enabled,
+            .tooltip_label_w = undefined,
+            .tooltip_mouse_still_since = 0,
+            .tooltip_last_mx = 0,
+            .tooltip_last_my = 0,
         };
 
         {
@@ -367,6 +386,8 @@ pub const App = struct {
         app.btn_w_copy = rl.measureTextEx(app.ui_font, "copy", @floatFromInt(FONT_SIZE_BTN), 0).x;
         app.btn_w_paste = rl.measureTextEx(app.ui_font, "paste", @floatFromInt(FONT_SIZE_BTN), 0).x;
         app.btn_w_reset = rl.measureTextEx(app.ui_font, "reset", @floatFromInt(FONT_SIZE_BTN), 0).x;
+        app.tooltip_label_w = rl.measureTextEx(app.ui_font, TOOLTIP_LABEL, FONT_SIZE_LG, 1).x;
+        app.tooltip_mouse_still_since = rl.getTime();
         app.syncTextBox();
         logEvent(.app, "init {d}x{d} dpi={d} method={s}", .{ rw, rh, dpi, @tagName(render_method) });
         return app;
