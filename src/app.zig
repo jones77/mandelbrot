@@ -945,6 +945,17 @@ pub const App = struct {
         self.syncTextBox();
     }
 
+    fn pixelCenterToComplex(self: *const App, px: f64, py: f64) struct { x: f64, y: f64 } {
+        const w: f64 = @floatFromInt(self.image.width);
+        const h: f64 = @floatFromInt(self.image.height);
+        const aspect = self.viewportAspect();
+        const range_x = self.view.range;
+        const range_y = self.view.range / aspect;
+        const cx = (self.view.center_x + self.view.offset_x) + ((px + 0.5) / w - 0.5) * range_x;
+        const cy = (self.view.center_y + self.view.offset_y) - ((py + 0.5) / h - 0.5) * range_y;
+        return .{ .x = cx, .y = cy };
+    }
+
     fn drawToolbarButton(self: *const App, x: i32, w: i32, label: [:0]const u8, label_w: f32, btn_y: i32, btn_h: i32, mx: i32, my: i32) void {
         const hover = mx >= x and mx < x + w and my >= btn_y and my < btn_y + btn_h;
         rl.drawRectangle(x, btn_y, w, btn_h, if (hover) COL_BTN_BG_HOVER else COL_BTN_BG);
@@ -1037,6 +1048,56 @@ pub const App = struct {
                 my >= LINE1_H + HINT_PAD_Y and my < LINE1_H + HINT_PAD_Y + @as(i32, @intFromFloat(FONT_SIZE_LG));
             rl.drawTextEx(self.ui_font, chk_label, .{ .x = chk_x, .y = chk_y }, FONT_SIZE_LG, 1,
                 if (hover) COL_TEXT else COL_HINT);
+        }
+
+        // Coordinate tooltip: 2s hover delay, pixel-center coords
+        if (self.tooltip_enabled) {
+            const viewport_y = TOTAL_TOP;
+            if (my >= viewport_y and my < self.render_h) {
+                const dpi_f: f64 = @floatFromInt(self.dpi_scale);
+                const phys_px = @as(f64, @floatFromInt(mx)) * dpi_f;
+                const phys_py = (@as(f64, @floatFromInt(my)) - @as(f64, @floatFromInt(viewport_y))) * dpi_f;
+                const w_f: f64 = @floatFromInt(self.image.width);
+                const h_f: f64 = @floatFromInt(self.image.height);
+
+                if (phys_px >= 0 and phys_px < w_f and phys_py >= 0 and phys_py < h_f) {
+                    const moved = @abs(mx - self.tooltip_last_mx) > TOOLTIP_MOVE_THRESHOLD_PX or
+                        @abs(my - self.tooltip_last_my) > TOOLTIP_MOVE_THRESHOLD_PX;
+                    if (moved) {
+                        self.tooltip_mouse_still_since = rl.getTime();
+                        self.tooltip_last_mx = mx;
+                        self.tooltip_last_my = my;
+                    }
+
+                    if (rl.getTime() - self.tooltip_mouse_still_since >= TOOLTIP_DELAY_S) {
+                        const px: f64 = @floor(phys_px);
+                        const py: f64 = @floor(phys_py);
+                        const coord = self.pixelCenterToComplex(px, py);
+
+                        var tooltip_buf: [128]u8 = undefined;
+                        const tooltip_text = std.fmt.bufPrintZ(&tooltip_buf, "x={d:.8}  y={d:.8}", .{ coord.x, coord.y }) catch unreachable;
+
+                        const tt_size = rl.measureTextEx(self.ui_font, tooltip_text, FONT_SIZE_LG, 1);
+                        const tt_w = tt_size.x + @as(f32, @floatFromInt(TOOLTIP_PAD_X * 2));
+                        const tt_h = tt_size.y + @as(f32, @floatFromInt(TOOLTIP_PAD_Y * 2));
+
+                        const c_x: f32 = @floatFromInt(mx + TOOLTIP_OFFSET_X);
+                        const c_y: f32 = @floatFromInt(my + TOOLTIP_OFFSET_Y);
+                        const max_x = @as(f32, @floatFromInt(self.render_w)) - tt_w - @as(f32, @floatFromInt(TOP_PAD));
+                        const max_y = @as(f32, @floatFromInt(self.render_h)) - tt_h - @as(f32, @floatFromInt(TOP_PAD));
+                        const tt_x = @min(max_x, @max(@as(f32, @floatFromInt(TOP_PAD)), c_x));
+                        const tt_y = @min(max_y, @max(@as(f32, @floatFromInt(viewport_y)), c_y));
+
+                        const bg = rl.Rectangle{ .x = tt_x, .y = tt_y, .width = tt_w, .height = tt_h };
+                        rl.drawRectangleRounded(bg, 0.3, 4, .{ .r = 30, .g = 30, .b = 40, .a = 200 });
+                        rl.drawTextEx(self.ui_font, tooltip_text, .{ .x = tt_x + @as(f32, @floatFromInt(TOOLTIP_PAD_X)), .y = tt_y + @as(f32, @floatFromInt(TOOLTIP_PAD_Y)) }, FONT_SIZE_LG, 1, .white);
+                    }
+                }
+            } else {
+                self.tooltip_mouse_still_since = rl.getTime();
+                self.tooltip_last_mx = mx;
+                self.tooltip_last_my = my;
+            }
         }
 
         if (self.render_timed_out) {
