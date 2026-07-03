@@ -23,6 +23,7 @@ const RenderConfig = struct {
     periodicity_eps_sq: f32,
     glitch_ratio: f32,
     ref_orbit: ?[]const m.RefOrbit,
+    use_perturbation: bool,
     rows_completed: ?[]bool,
     offset_x: f64,
     offset_y: f64,
@@ -71,12 +72,13 @@ fn renderStrip(ctx: *RenderStrip) void {
             const max_f: f32 = @as(f32, @floatFromInt(max_iters));
             const pix_idx = (py * w + px) * PIXEL_CHANNELS;
 
-            // Path selection: perturbation (if ref available) > f64 (if deep zoom or high iters) > f32 standard.
-            const mu: f32 = if (cfg.ref_orbit) |orbit| blk: {
+            // Path selection: perturbation (if useful and available) > f64 (if ref exists or deep zoom) > f32 standard.
+            const mu: f32 = if (cfg.use_perturbation) blk: {
+                const orbit = cfg.ref_orbit.?;
                 const dcx = @as(f64, @floatFromInt(px)) * cfg.range_x / @as(f64, @floatFromInt(w)) - 0.5 * cfg.range_x + cfg.offset_x;
                 const dcy = @as(f64, @floatFromInt(py)) * cfg.range_y / @as(f64, @floatFromInt(h)) - 0.5 * cfg.range_y + cfg.offset_y;
                 break :blk m.renderPerturbationPixel(dcx, dcy, orbit, max_iters, cfg.glitch_ratio);
-            } else if (render_fallback_f64)
+            } else if (cfg.ref_orbit != null or render_fallback_f64)
                 m.rebaseFallback(cx_f64, cy_f64, cx_f64, cy_f64, 0, max_iters)
             else m.standardPixel(cx, cy, max_iters, cfg.interior_eps_sq, cfg.periodicity_eps_sq);
 
@@ -144,6 +146,13 @@ pub fn renderMandelbrot(
         null;
     defer if (ref_orbit) |orbit| std.heap.page_allocator.free(orbit);
 
+    const use_perturbation = if (ref_orbit) |orbit| blk: {
+        const last = orbit[orbit.len - 1];
+        const norm_sq = last.zx * last.zx + last.zy * last.zy;
+        const ref_escaped = !std.math.isFinite(norm_sq) or norm_sq > m.ESCAPE_RADIUS_SQ;
+        break :blk ref_escaped or view.render_method == .perturbation;
+    } else false;
+
     var num_threads: usize = h / MIN_ROWS_PER_THREAD;
     if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
     if (num_threads < 1) num_threads = 1;
@@ -167,6 +176,7 @@ pub fn renderMandelbrot(
         .periodicity_eps_sq = periodicity_eps_sq,
         .glitch_ratio = m.GLITCH_RATIO,
         .ref_orbit = ref_orbit,
+        .use_perturbation = use_perturbation,
         .rows_completed = rows_completed,
         .offset_x = view.offset_x,
         .offset_y = view.offset_y,
