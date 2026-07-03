@@ -1,6 +1,6 @@
-const std = @import("std");
-const rl = @import("raylib");
 const m = @import("mandelbrot.zig");
+const rl = @import("raylib");
+const std = @import("std");
 const renderer = @import("renderer.zig");
 const logEvent = @import("log.zig").logEvent;
 const PIXEL_CHANNELS = @import("pixel.zig").PIXEL_CHANNELS;
@@ -80,9 +80,10 @@ const TOOLTIP_PAD_Y: i32 = 4;
 const TextBuf = struct {
     buf: [TB_CAP + 1]u8,
     len: usize,
+    cursor: usize,
 
     fn init() TextBuf {
-        var tb = TextBuf{ .buf = undefined, .len = 0 };
+        var tb = TextBuf{ .buf = undefined, .len = 0, .cursor = 0 };
         tb.buf[0] = 0;
         return tb;
     }
@@ -95,25 +96,71 @@ const TextBuf = struct {
         const written = std.fmt.bufPrint(self.buf[0..TB_CAP], fmt, args) catch {
             self.len = 0;
             self.buf[0] = 0;
+            self.cursor = 0;
             return;
         };
         self.len = written.len;
+        self.cursor = self.len;
         self.buf[self.len] = 0;
     }
 
-    fn append(self: *TextBuf, ch: u8) void {
-        if (self.len < TB_CAP) {
-            self.buf[self.len] = ch;
-            self.len += 1;
-            self.buf[self.len] = 0;
+    fn insertChar(self: *TextBuf, ch: u8) void {
+        if (self.len >= TB_CAP) return;
+        var i = self.len;
+        while (i > self.cursor) : (i -= 1) {
+            self.buf[i] = self.buf[i - 1];
         }
+        self.buf[self.cursor] = ch;
+        self.len += 1;
+        self.cursor += 1;
+        self.buf[self.len] = 0;
     }
 
-    fn backspace(self: *TextBuf) void {
-        if (self.len > 0) {
-            self.len -= 1;
-            self.buf[self.len] = 0;
+    fn deleteBeforeCursor(self: *TextBuf) void {
+        if (self.cursor == 0) return;
+        var i = self.cursor;
+        while (i < self.len) : (i += 1) {
+            self.buf[i - 1] = self.buf[i];
         }
+        self.len -= 1;
+        self.cursor -= 1;
+        self.buf[self.len] = 0;
+    }
+
+    fn deleteAfterCursor(self: *TextBuf) void {
+        if (self.cursor == self.len) return;
+        var i = self.cursor;
+        while (i < self.len) : (i += 1) {
+            self.buf[i] = self.buf[i + 1];
+        }
+        self.len -= 1;
+        self.buf[self.len] = 0;
+    }
+
+    fn moveCursorLeft(self: *TextBuf) void {
+        if (self.cursor > 0) self.cursor -= 1;
+    }
+
+    fn moveCursorRight(self: *TextBuf) void {
+        if (self.cursor < self.len) self.cursor += 1;
+    }
+
+    fn moveHome(self: *TextBuf) void {
+        self.cursor = 0;
+    }
+
+    fn moveEnd(self: *TextBuf) void {
+        self.cursor = self.len;
+    }
+
+    /// Returns the text before the cursor as a null-terminated slice.
+    /// Temporarily modifies buf[cursor] to ensure proper termination.
+    fn beforeCursor(self: *TextBuf) [:0]const u8 {
+        const saved = self.buf[self.cursor];
+        self.buf[self.cursor] = 0;
+        const result = self.buf[0..self.cursor :0];
+        self.buf[self.cursor] = saved;
+        return result;
     }
 };
 
@@ -634,9 +681,28 @@ pub const App = struct {
         });
     }
 
+    fn isValidCoord(parsed: m.ViewState) bool {
+        const x_min = m.INITIAL_CENTER_X - m.INITIAL_RANGE / 2.0;
+        const x_max = m.INITIAL_CENTER_X + m.INITIAL_RANGE / 2.0;
+        const y_min = m.INITIAL_CENTER_Y - m.INITIAL_RANGE / 2.0;
+        const y_max = m.INITIAL_CENTER_Y + m.INITIAL_RANGE / 2.0;
+        if (parsed.center_x < x_min or parsed.center_x > x_max) return false;
+        if (parsed.center_y < y_min or parsed.center_y > y_max) return false;
+        if (parsed.range <= 0 or parsed.range > m.INITIAL_RANGE) return false;
+        if (parsed.max_iters < m.MIN_ITERS or parsed.max_iters > m.MAX_ITERS_CAP) return false;
+        return true;
+    }
+
     fn textBoxApply(self: *App) !void {
         self.cancelAnimation();
-        const parsed = parseViewState(self.tb_buf.buf[0..self.tb_buf.len]) orelse return;
+        const parsed = parseViewState(self.tb_buf.buf[0..self.tb_buf.len]) orelse {
+            self.syncTextBox();
+            return;
+        };
+        if (!isValidCoord(parsed)) {
+            self.syncTextBox();
+            return;
+        }
         const same = parsed.center_x == self.view.center_x and
             parsed.center_y == self.view.center_y and
             parsed.range == self.view.range and
@@ -799,8 +865,7 @@ pub const App = struct {
             tb_click_consumed = true;
         }
 
-        // Always-active keyboard shortcuts (work even when text box is active)
-        {
+        if (!self.tb_active) {
             const key_left = rl.isKeyPressed(.left);
             const key_right = rl.isKeyPressed(.right);
             if (key_left or key_right) {
@@ -841,7 +906,12 @@ pub const App = struct {
         }
 
         if (self.tb_active) {
-            if (rl.isKeyPressed(.backspace)) self.tb_buf.backspace();
+            if (rl.isKeyPressed(.left)) self.tb_buf.moveCursorLeft();
+            if (rl.isKeyPressed(.right)) self.tb_buf.moveCursorRight();
+            if (rl.isKeyPressed(.home)) self.tb_buf.moveHome();
+            if (rl.isKeyPressed(.end)) self.tb_buf.moveEnd();
+            if (rl.isKeyPressed(.backspace)) self.tb_buf.deleteBeforeCursor();
+            if (rl.isKeyPressed(.delete)) self.tb_buf.deleteAfterCursor();
             if (rl.isKeyPressed(.enter) or rl.isKeyPressed(.kp_enter)) {
                 self.tb_active = false;
                 try self.textBoxApply();
@@ -852,7 +922,7 @@ pub const App = struct {
             }
             var ch = rl.getCharPressed();
             while (ch != 0) {
-                if (ch >= ASCII_PRN_MIN and ch < ASCII_PRN_MAX + 1) self.tb_buf.append(@as(u8, @intCast(ch)));
+                if (ch >= ASCII_PRN_MIN and ch < ASCII_PRN_MAX + 1) self.tb_buf.insertChar(@as(u8, @intCast(ch)));
                 ch = rl.getCharPressed();
             }
             return;
@@ -1005,15 +1075,18 @@ pub const App = struct {
             if (self.tb_active) COL_TB_BORDER_ACTIVE else COL_TB_BORDER);
 
         var display_buf: [CLIPBOARD_BUF]u8 = undefined;
-        const display_text = std.fmt.bufPrintZ(&display_buf, VIEW_FMT, .{
-            self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters,
-        }) catch unreachable;
+        const display_text = if (self.tb_active)
+            self.tb_buf.slice()
+        else
+            std.fmt.bufPrintZ(&display_buf, VIEW_FMT, .{
+                self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters,
+            }) catch unreachable;
         rl.drawTextEx(self.ui_font, display_text, .{ .x = @floatFromInt(tb.tb_start_x + TEXT_PAD_X), .y = @floatFromInt(tb_y + TEXT_PAD_Y) }, FONT_SIZE_LG, 1.0, COL_TEXT);
 
         if (self.tb_active) {
             const blink = @as(u32, @intFromFloat(rl.getTime() * 2.0)) & 1;
             if (blink == 0) {
-                const m2 = rl.measureTextEx(self.ui_font, display_text, FONT_SIZE_LG, 1.0);
+                const m2 = rl.measureTextEx(self.ui_font, self.tb_buf.beforeCursor(), FONT_SIZE_LG, 1.0);
                 const cx = tb.tb_start_x + TEXT_PAD_X + @as(i32, @intFromFloat(m2.x));
                 rl.drawRectangle(cx, tb_y + TEXT_PAD_Y, CURSOR_W, CURSOR_H, COL_TB_BORDER_ACTIVE);
             }
@@ -1109,6 +1182,201 @@ pub const App = struct {
 };
 
 const testing = std.testing;
+
+test "TextBuf init is empty, cursor at 0" {
+    const tb = TextBuf.init();
+    try testing.expectEqual(@as(usize, 0), tb.len);
+    try testing.expectEqual(@as(usize, 0), tb.cursor);
+    try testing.expectEqual(@as(u8, 0), tb.buf[0]);
+}
+
+test "TextBuf format sets cursor to len" {
+    var tb = TextBuf.init();
+    tb.format("abc", .{});
+    try testing.expectEqual(@as(usize, 3), tb.len);
+    try testing.expectEqual(@as(usize, 3), tb.cursor);
+}
+
+test "TextBuf insertChar at cursor shifts right" {
+    var tb = TextBuf.init();
+    tb.format("ac", .{});
+    tb.cursor = 1;
+    tb.insertChar('b');
+    try testing.expectEqual(@as(usize, 3), tb.len);
+    try testing.expectEqual(@as(usize, 2), tb.cursor);
+    try testing.expectEqualSlices(u8, "abc", tb.slice());
+}
+
+test "TextBuf insertChar at end appends" {
+    var tb = TextBuf.init();
+    tb.format("ab", .{});
+    tb.insertChar('c');
+    try testing.expectEqual(@as(usize, 3), tb.len);
+    try testing.expectEqual(@as(usize, 3), tb.cursor);
+    try testing.expectEqualSlices(u8, "abc", tb.slice());
+}
+
+test "TextBuf insertChar at start prepends" {
+    var tb = TextBuf.init();
+    tb.format("bc", .{});
+    tb.cursor = 0;
+    tb.insertChar('a');
+    try testing.expectEqual(@as(usize, 3), tb.len);
+    try testing.expectEqual(@as(usize, 1), tb.cursor);
+    try testing.expectEqualSlices(u8, "abc", tb.slice());
+}
+
+test "TextBuf deleteBeforeCursor removes char before cursor" {
+    var tb = TextBuf.init();
+    tb.format("abcd", .{});
+    tb.cursor = 3;
+    tb.deleteBeforeCursor();
+    try testing.expectEqual(@as(usize, 3), tb.len);
+    try testing.expectEqual(@as(usize, 2), tb.cursor);
+    try testing.expectEqualSlices(u8, "abd", tb.slice());
+}
+
+test "TextBuf deleteBeforeCursor at position 0 does nothing" {
+    var tb = TextBuf.init();
+    tb.format("abc", .{});
+    tb.cursor = 0;
+    tb.deleteBeforeCursor();
+    try testing.expectEqual(@as(usize, 3), tb.len);
+    try testing.expectEqual(@as(usize, 0), tb.cursor);
+}
+
+test "TextBuf deleteAfterCursor removes char at cursor" {
+    var tb = TextBuf.init();
+    tb.format("abcd", .{});
+    tb.cursor = 1;
+    tb.deleteAfterCursor();
+    try testing.expectEqual(@as(usize, 3), tb.len);
+    try testing.expectEqual(@as(usize, 1), tb.cursor);
+    try testing.expectEqualSlices(u8, "acd", tb.slice());
+}
+
+test "TextBuf deleteAfterCursor at end does nothing" {
+    var tb = TextBuf.init();
+    tb.format("abc", .{});
+    tb.cursor = 3;
+    tb.deleteAfterCursor();
+    try testing.expectEqual(@as(usize, 3), tb.len);
+}
+
+test "TextBuf deleteAfterCursor on empty buffer does nothing" {
+    var tb = TextBuf.init();
+    tb.deleteAfterCursor();
+    try testing.expectEqual(@as(usize, 0), tb.len);
+    try testing.expectEqual(@as(usize, 0), tb.cursor);
+}
+
+test "TextBuf beforeCursor returns null-terminated text before cursor" {
+    var tb = TextBuf.init();
+    tb.format("hello world", .{});
+    tb.cursor = 5;
+    try testing.expectEqualSlices(u8, "hello", tb.beforeCursor());
+    // Verify buffer is unmodified after call
+    try testing.expectEqual(@as(usize, 5), tb.cursor);
+    try testing.expectEqual(@as(usize, 11), tb.len);
+    try testing.expectEqualSlices(u8, "hello world", tb.slice());
+}
+
+test "TextBuf moveCursorLeft and moveCursorRight" {
+    var tb = TextBuf.init();
+    tb.format("abc", .{});
+    tb.moveCursorLeft();
+    try testing.expectEqual(@as(usize, 2), tb.cursor);
+    tb.moveCursorLeft();
+    try testing.expectEqual(@as(usize, 1), tb.cursor);
+    tb.moveCursorLeft();
+    try testing.expectEqual(@as(usize, 0), tb.cursor);
+    tb.moveCursorLeft();
+    try testing.expectEqual(@as(usize, 0), tb.cursor);
+    tb.moveCursorRight();
+    try testing.expectEqual(@as(usize, 1), tb.cursor);
+    tb.moveCursorRight();
+    try testing.expectEqual(@as(usize, 2), tb.cursor);
+    tb.moveCursorRight();
+    try testing.expectEqual(@as(usize, 3), tb.cursor);
+    tb.moveCursorRight();
+    try testing.expectEqual(@as(usize, 3), tb.cursor);
+}
+
+test "TextBuf moveHome and moveEnd" {
+    var tb = TextBuf.init();
+    tb.format("abc", .{});
+    tb.cursor = 2;
+    tb.moveHome();
+    try testing.expectEqual(@as(usize, 0), tb.cursor);
+    tb.moveEnd();
+    try testing.expectEqual(@as(usize, 3), tb.cursor);
+}
+
+test "isValidCoord validates bounds" {
+    // Valid: default view center
+    try testing.expect(App.isValidCoord(.{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE,
+        .max_iters = m.DEFAULT_MAX_ITERS,
+    }));
+
+    // Valid: zoomed in
+    try testing.expect(App.isValidCoord(.{
+        .center_x = -0.75,
+        .center_y = 0.0,
+        .range = 0.1,
+        .max_iters = 4096,
+    }));
+
+    // Invalid: center_x too far left
+    try testing.expect(!App.isValidCoord(.{
+        .center_x = m.INITIAL_CENTER_X - m.INITIAL_RANGE,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE / 2,
+        .max_iters = m.DEFAULT_MAX_ITERS,
+    }));
+
+    // Invalid: center_y too far down
+    try testing.expect(!App.isValidCoord(.{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y - m.INITIAL_RANGE,
+        .range = m.INITIAL_RANGE / 2,
+        .max_iters = m.DEFAULT_MAX_ITERS,
+    }));
+
+    // Invalid: range > INITIAL_RANGE
+    try testing.expect(!App.isValidCoord(.{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE + 0.01,
+        .max_iters = m.DEFAULT_MAX_ITERS,
+    }));
+
+    // Invalid: range <= 0
+    try testing.expect(!App.isValidCoord(.{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = -0.1,
+        .max_iters = m.DEFAULT_MAX_ITERS,
+    }));
+
+    // Invalid: iters < MIN_ITERS
+    try testing.expect(!App.isValidCoord(.{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE / 2,
+        .max_iters = m.MIN_ITERS - 1,
+    }));
+
+    // Invalid: iters > MAX_ITERS_CAP
+    try testing.expect(!App.isValidCoord(.{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE / 2,
+        .max_iters = m.MAX_ITERS_CAP + 1,
+    }));
+}
 
 test "parseViewState round-trip default view" {
     const v = m.ViewState{

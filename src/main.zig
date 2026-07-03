@@ -26,6 +26,11 @@ pub fn main(init: std.process.Init) !void {
     _ = try a.renderFresh(true);
     try a.saveSnapshot();
 
+    // Drain stale input events accumulated during init/rendering so the
+    // main loop starts with a clean input state.
+    while (rl.getKeyPressed() != .null) {}
+    while (rl.getCharPressed() != 0) {}
+
     // Main loop.
     while (!rl.windowShouldClose()) {
         try a.handleResize();
