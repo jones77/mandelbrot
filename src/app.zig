@@ -869,40 +869,18 @@ pub const App = struct {
             const delta_x = (phys_cx / @as(f64, @floatFromInt(self.image.width)) - 0.5) * self.view.range;
             const delta_y = (phys_cy / @as(f64, @floatFromInt(self.image.height)) - 0.5) * (self.view.range / aspect);
 
-            // Fold offset into center_x when it's large enough to be
-            // representable in f64 (normal zoom).  Keep it separate only
-            // at deep zoom where center_x + offset rounds to center_x.
-            const center_mag = @max(@abs(self.view.center_x), @abs(self.view.center_y));
-            const fold_eps = center_mag * std.math.floatEps(f64);
-
-            const new_ox = self.view.offset_x + delta_x;
-            const new_oy = self.view.offset_y + delta_y;
-
-            var final_cx = self.view.center_x;
-            var final_cy = self.view.center_y;
-            var final_ox: f64 = 0;
-            var final_oy: f64 = 0;
-
-            if (@abs(new_ox) >= fold_eps) {
-                final_cx += new_ox;
-            } else {
-                final_ox = new_ox;
-            }
-            if (@abs(new_oy) >= fold_eps) {
-                final_cy += new_oy;
-            } else {
-                final_oy = new_oy;
-            }
+            // Compute new center + offset (fold or keep separate based on zoom depth).
+            const delta = m.computeDragDelta(self.view, delta_x, delta_y);
 
             truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
 
             {
                 const from_view = self.view;
                 const to_view = m.ViewState{
-                    .center_x = final_cx,
-                    .center_y = final_cy,
-                    .offset_x = final_ox,
-                    .offset_y = final_oy,
+                    .center_x = delta.center_x,
+                    .center_y = delta.center_y,
+                    .offset_x = delta.offset_x,
+                    .offset_y = delta.offset_y,
                     .range = new_range,
                     .max_iters = self.view.max_iters,
                 };
@@ -914,10 +892,10 @@ pub const App = struct {
                 self.anim.duration = computeAnimDuration(from_view, to_view);
             }
 
-            self.view.center_x = final_cx;
-            self.view.center_y = final_cy;
-            self.view.offset_x = final_ox;
-            self.view.offset_y = final_oy;
+            self.view.center_x = delta.center_x;
+            self.view.center_y = delta.center_y;
+            self.view.offset_x = delta.offset_x;
+            self.view.offset_y = delta.offset_y;
             self.view.range = new_range;
 
             const target_iters = m.computeAutoZoomIters(self.view.range);
@@ -1076,4 +1054,21 @@ test "parseViewState invalid input returns null" {
     try testing.expect(parseViewState("(1, 2) range=abc iters=1024") == null);
     try testing.expect(parseViewState("(1, 2) range=3.5 iters=xyz") == null);
     try testing.expect(parseViewState("no parens here") == null);
+}
+
+test "parseViewState parenthesized format" {
+    const expected = m.ViewState{
+        .center_x = -0.743566,
+        .center_y = 0.131402,
+        .range = 4.5e-10,
+        .max_iters = 65536,
+    };
+    const text = "(-0.743566, 0.131402) range=4.5e-10 iters=65536";
+    const parsed = parseViewState(text) orelse {
+        @panic("parseViewState returned null");
+    };
+    try testing.expectApproxEqAbs(expected.center_x, parsed.center_x, 1e-6);
+    try testing.expectApproxEqAbs(expected.center_y, parsed.center_y, 1e-6);
+    try testing.expectApproxEqAbs(expected.range, parsed.range, 1e-14);
+    try testing.expectEqual(expected.max_iters, parsed.max_iters);
 }

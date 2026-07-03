@@ -73,6 +73,48 @@ pub const ViewState = struct {
 
 pub const ComplexPoint = struct { x: f64, y: f64 };
 
+pub const DragDeltaResult = struct {
+    center_x: f64,
+    center_y: f64,
+    offset_x: f64,
+    offset_y: f64,
+};
+
+/// Computes the new center + offset after a drag delta.
+/// At normal zoom, the delta is large enough to fold into center_x/center_y.
+/// At deep zoom, the delta is kept in offset_x/offset_y (which the renderer
+/// adds to per-pixel dcx/dcy) to avoid f64 precision loss.
+pub fn computeDragDelta(view: ViewState, delta_x: f64, delta_y: f64) DragDeltaResult {
+    const center_mag = @max(@abs(view.center_x), @abs(view.center_y));
+    const fold_eps = center_mag * std.math.floatEps(f64);
+
+    const new_ox = view.offset_x + delta_x;
+    const new_oy = view.offset_y + delta_y;
+
+    var final_cx = view.center_x;
+    var final_cy = view.center_y;
+    var final_ox: f64 = 0;
+    var final_oy: f64 = 0;
+
+    if (@abs(new_ox) >= fold_eps) {
+        final_cx += new_ox;
+    } else {
+        final_ox = new_ox;
+    }
+    if (@abs(new_oy) >= fold_eps) {
+        final_cy += new_oy;
+    } else {
+        final_oy = new_oy;
+    }
+
+    return .{
+        .center_x = final_cx,
+        .center_y = final_cy,
+        .offset_x = final_ox,
+        .offset_y = final_oy,
+    };
+}
+
 // ========================= Palette =========================
 
 pub var palette: [PALETTE_SIZE][4]u8 = undefined;
@@ -1660,5 +1702,39 @@ test "shouldUseF64Fallback path selection" {
     try testing.expect(shouldUseF64Fallback(.auto, 1.0, F32_MAX_ITERS_THRESHOLD + 100));
     // .perturbation never falls back (uses perturbation path instead)
     try testing.expect(!shouldUseF64Fallback(.perturbation, 0.0, 100));
+}
+
+test "computeDragDelta folds at normal zoom, keeps offset at deep zoom" {
+    // Normal zoom: delta ~ range/2 >> fold_eps → folded into center_x
+    {
+        const v = ViewState{ .center_x = -0.75, .center_y = 0.0, .range = 3.5, .max_iters = 2048 };
+        const delta_x = 1.4; // ≈ range/2, well above fold_eps ≈ 1.6e-16
+        const delta_y = 0.0;
+        const r = computeDragDelta(v, delta_x, delta_y);
+        try testing.expectApproxEqAbs(-0.75 + delta_x, r.center_x, 1e-15);
+        try testing.expectEqual(@as(f64, 0.0), r.offset_x);
+        try testing.expectEqual(v.center_y, r.center_y);
+    }
+    // Deep zoom: delta ~ range/2 << fold_eps → kept in offset
+    {
+        const v = ViewState{ .center_x = -1.99183057, .center_y = 0.0, .range = 7.82875744e-23, .max_iters = 16384 };
+        const delta_x = 3.9e-23; // ≈ range/2, well below fold_eps ≈ 4.4e-16
+        const delta_y = 0.0;
+        const r = computeDragDelta(v, delta_x, delta_y);
+        try testing.expectEqual(v.center_x, r.center_x);
+        try testing.expectApproxEqAbs(delta_x, r.offset_x, 1e-36);
+        try testing.expectEqual(v.center_y, r.center_y);
+    }
+    // Mixed: one axis folds, one stays in offset
+    {
+        const v = ViewState{ .center_x = -0.75, .center_y = -1.991, .range = 3.5, .max_iters = 2048 };
+        const delta_x = 1.4; // folds (large)
+        const delta_y = 3.9e-23; // stays in offset (tiny)
+        const r = computeDragDelta(v, delta_x, delta_y);
+        try testing.expectApproxEqAbs(-0.75 + delta_x, r.center_x, 1e-15);
+        try testing.expectEqual(@as(f64, 0.0), r.offset_x);
+        try testing.expectEqual(v.center_y, r.center_y);
+        try testing.expectApproxEqAbs(delta_y, r.offset_y, 1e-36);
+    }
 }
 
