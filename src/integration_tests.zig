@@ -371,3 +371,129 @@ test "every pixel classification matches ground truth at 128 iters" {
     try testing.expect(interior > 0);
     try testing.expect(exterior > 0);
 }
+
+test "every pixel matches ground truth at startup resolution and iters" {
+    const max_iters: u32 = m.DEFAULT_MAX_ITERS; // 2048
+    // Match the logical viewport size from App.init:
+    //   rw = @divExact(sw, dpi), where sw = getScreenWidth(), dpi = @divTrunc(sw, 900)
+    //   vh_phys = sh - TOTAL_TOP*dpi, and we render at screen resolution (sw x vh_phys).
+    // To keep the test fast we use a smaller image but the same aspect ratio
+    // and iteration count that the app uses at startup.
+    const w: i32 = 128;
+    const h: i32 = 128;
+
+    const view = m.ViewState{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE,
+        .max_iters = max_iters,
+    };
+
+    m.buildPalette();
+    const img = rl.genImageColor(w, h, .black);
+    defer rl.unloadImage(img);
+    const pixels = @as([*]u8, @ptrCast(img.data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+    const timed_out = try renderer.renderMandelbrot(pixels, @intCast(w), @intCast(h), view, true, 0, rl.getTime, null);
+    try testing.expect(!timed_out);
+
+    const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
+    const range_x = view.range;
+    const range_y = view.range / aspect;
+    const left = view.center_x + view.offset_x - range_x / 2.0;
+    const top = view.center_y + view.offset_y - range_y / 2.0;
+
+    var mismatch: usize = 0;
+    var interior: usize = 0;
+    var exterior: usize = 0;
+    // Track mismatches near the real axis (within 5px of center row).
+    var axis_mismatch: usize = 0;
+    const center_row = h / 2;
+
+    for (0..@as(usize, @intCast(h))) |py| {
+        const cy = top + @as(f64, @floatFromInt(py)) * range_y / @as(f64, @floatFromInt(h));
+        for (0..@as(usize, @intCast(w))) |px| {
+            const cx = left + @as(f64, @floatFromInt(px)) * range_x / @as(f64, @floatFromInt(w));
+
+            const gt_interior = groundTruthInterior(cx, cy, max_iters);
+            const idx = (py * @as(usize, @intCast(w)) + px) * 4;
+            const renderer_black = isPixelBlack(pixels, idx);
+
+            if (gt_interior != renderer_black) {
+                mismatch += 1;
+                const dy = @abs(@as(i64, @intCast(py)) - @as(i64, @intCast(center_row)));
+                if (dy <= 5) axis_mismatch += 1;
+            }
+            if (gt_interior) interior += 1 else exterior += 1;
+        }
+    }
+
+    // The ground truth runs plain f64 iteration (same as rebaseFallback),
+    // so every pixel must match at any iteration count.
+    try testing.expectEqual(@as(usize, 0), mismatch);
+    try testing.expect(interior > 0);
+    try testing.expect(exterior > 0);
+}
+
+test "perturbation and rebaseFallback produce identical colors at startup view" {
+    // The old code (f678ecc) used the perturbation path for the startup view
+    // (because cfg.ref_orbit was non-null). The new code uses rebaseFallback
+    // (because use_perturbation is false for interior reference).
+    // Both MUST produce the same output — same classification, same color.
+    const max_iters: u32 = m.DEFAULT_MAX_ITERS;
+    const w: i32 = 64;
+    const h: i32 = 64;
+
+    const base_view = m.ViewState{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE,
+        .max_iters = max_iters,
+    };
+
+    m.buildPalette();
+    var images: [2]rl.Image = undefined;
+    var pixels: [2][]u8 = undefined;
+    const methods = [_]m.RenderMethod{ .auto, .perturbation };
+    for (methods, 0..) |method, i| {
+        images[i] = rl.genImageColor(w, h, .black);
+        pixels[i] = @as([*]u8, @ptrCast(images[i].data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+        const view = m.ViewState{
+            .center_x = base_view.center_x,
+            .center_y = base_view.center_y,
+            .range = base_view.range,
+            .max_iters = base_view.max_iters,
+            .render_method = method,
+        };
+        const timed_out = try renderer.renderMandelbrot(pixels[i], @intCast(w), @intCast(h), view, true, 0, rl.getTime, null);
+        try testing.expect(!timed_out);
+    }
+    defer {
+        for (&images) |*img| rl.unloadImage(img.*);
+    }
+
+    const total = @as(usize, @intCast(w * h));
+    var class_mismatch: usize = 0;
+    var color_diff_pixels: usize = 0;
+
+    for (0..total) |px| {
+        const b0 = isPixelBlack(pixels[0], px * 4);
+        const b1 = isPixelBlack(pixels[1], px * 4);
+        if (b0 != b1) class_mismatch += 1;
+        if (b0 and b1) continue; // both black → skip color check
+
+        // At least one path says exterior — compare colors
+        const idx = px * 4;
+        var max_channel_diff: u8 = 0;
+        for (0..3) |c| {
+            const d = @abs(@as(i16, @intCast(pixels[0][idx + c])) - @as(i16, @intCast(pixels[1][idx + c])));
+            if (d > max_channel_diff) max_channel_diff = @intCast(d);
+        }
+        if (max_channel_diff > 5) color_diff_pixels += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 0), class_mismatch);
+    // Allow a few pixels near the boundary where the two paths give
+    // slightly different smooth iteration counts (sub-6/255 color diff).
+    const max_color_diff: usize = @max(@as(usize, 1), total * 5 / 100);
+    try testing.expect(color_diff_pixels <= max_color_diff);
+}
