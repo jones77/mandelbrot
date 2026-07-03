@@ -88,7 +88,7 @@ const TextBuf = struct {
         return tb;
     }
 
-    fn slice(self: TextBuf) [:0]const u8 {
+    fn slice(self: *const TextBuf) [:0]const u8 {
         return self.buf[0..self.len :0];
     }
 
@@ -153,14 +153,8 @@ const TextBuf = struct {
         self.cursor = self.len;
     }
 
-    /// Returns the text before the cursor as a null-terminated slice.
-    /// Temporarily modifies buf[cursor] to ensure proper termination.
-    fn beforeCursor(self: *TextBuf) [:0]const u8 {
-        const saved = self.buf[self.cursor];
-        self.buf[self.cursor] = 0;
-        const result = self.buf[0..self.cursor :0];
-        self.buf[self.cursor] = saved;
-        return result;
+    fn beforeCursor(self: *const TextBuf) []const u8 {
+        return self.buf[0..self.cursor];
     }
 };
 
@@ -1086,7 +1080,11 @@ pub const App = struct {
         if (self.tb_active) {
             const blink = @as(u32, @intFromFloat(rl.getTime() * 2.0)) & 1;
             if (blink == 0) {
-                const m2 = rl.measureTextEx(self.ui_font, self.tb_buf.beforeCursor(), FONT_SIZE_LG, 1.0);
+                var cursor_buf: [TB_CAP + 1]u8 = undefined;
+                @memcpy(cursor_buf[0..self.tb_buf.cursor], self.tb_buf.buf[0..self.tb_buf.cursor]);
+                cursor_buf[self.tb_buf.cursor] = 0;
+                const cursor_text = cursor_buf[0..self.tb_buf.cursor :0];
+                const m2 = rl.measureTextEx(self.ui_font, cursor_text, FONT_SIZE_LG, 1.0);
                 const cx = tb.tb_start_x + TEXT_PAD_X + @as(i32, @intFromFloat(m2.x));
                 rl.drawRectangle(cx, tb_y + TEXT_PAD_Y, CURSOR_W, CURSOR_H, COL_TB_BORDER_ACTIVE);
             }
