@@ -121,3 +121,54 @@ test "default view renders with colored exterior pixels" {
         try testing.expect(non_black > total * c.min_exterior_pct / 100);
     }
 }
+
+test "all three algorithms agree on interior/exterior classification" {
+    m.buildPalette();
+
+    const w: i32 = 64;
+    const h: i32 = 64;
+    // View centered at (-0.75, 0.1) where the reference is exterior,
+    // so .auto activates perturbation — all three paths are exercised.
+    const base_view = m.ViewState{
+        .center_x = -0.75,
+        .center_y = 0.1,
+        .range = 0.5,
+        .max_iters = 256,
+    };
+    const methods = [_]m.RenderMethod{ .auto, .f64, .perturbation };
+
+    var images: [3]rl.Image = undefined;
+    var pixels: [3][]u8 = undefined;
+    for (methods, 0..) |method, i| {
+        images[i] = rl.genImageColor(w, h, .black);
+        pixels[i] = @as([*]u8, @ptrCast(images[i].data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+        const view = m.ViewState{
+            .center_x = base_view.center_x,
+            .center_y = base_view.center_y,
+            .range = base_view.range,
+            .max_iters = base_view.max_iters,
+            .render_method = method,
+        };
+        const timed_out = try renderer.renderMandelbrot(pixels[i], @intCast(w), @intCast(h), view, true, 0, rl.getTime, null);
+        try testing.expect(!timed_out);
+    }
+    defer {
+        for (&images) |*img| rl.unloadImage(img.*);
+    }
+
+    const uw: usize = @intCast(w);
+    const total = uw * @as(usize, @intCast(h));
+    var mismatch: usize = 0;
+    var exterior: usize = 0;
+
+    for (0..total) |px| {
+        const b0 = isPixelBlack(pixels[0], px * 4);
+        const b1 = isPixelBlack(pixels[1], px * 4);
+        const b2 = isPixelBlack(pixels[2], px * 4);
+        if (b0 != b1 or b0 != b2) mismatch += 1;
+        if (!b0) exterior += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 0), mismatch);
+    try testing.expect(exterior > 0);
+}
