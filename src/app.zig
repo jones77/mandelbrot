@@ -862,6 +862,8 @@ pub const App = struct {
         if (!self.tb_active) {
             const key_left = rl.isKeyPressed(.left);
             const key_right = rl.isKeyPressed(.right);
+            if (key_left) logEvent(.ui, "history left tb_active={}", .{self.tb_active});
+            if (key_right) logEvent(.ui, "history right tb_active={}", .{self.tb_active});
             if (key_left or key_right) {
                 if (key_left) {
                     if (self.history_ptr > 0) {
@@ -900,8 +902,14 @@ pub const App = struct {
         }
 
         if (self.tb_active) {
-            if (rl.isKeyPressed(.left)) self.tb_buf.moveCursorLeft();
-            if (rl.isKeyPressed(.right)) self.tb_buf.moveCursorRight();
+            if (rl.isKeyPressed(.left)) {
+                logEvent(.ui, "cursor left tb_active={} cursor={d}", .{self.tb_active, self.tb_buf.cursor});
+                self.tb_buf.moveCursorLeft();
+            }
+            if (rl.isKeyPressed(.right)) {
+                logEvent(.ui, "cursor right tb_active={} cursor={d}", .{self.tb_active, self.tb_buf.cursor});
+                self.tb_buf.moveCursorRight();
+            }
             if (rl.isKeyPressed(.home)) self.tb_buf.moveHome();
             if (rl.isKeyPressed(.end)) self.tb_buf.moveEnd();
             if (rl.isKeyPressed(.backspace)) self.tb_buf.deleteBeforeCursor();
