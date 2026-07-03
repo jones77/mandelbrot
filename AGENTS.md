@@ -21,7 +21,8 @@ Do NOT fetch the Chéritat website — the local file covers all needed content
 (Sections 3.1–3.6).
 
 [Heiland-Allen](https://mathr.co.uk/blog/2022-11-19_cardioid_and_bulb_checking.html)
-— cardioid/bulb bounding-box optimisation.
+— cardioid/bulb bounding-box optimisation.  Summary at `mathr-algorithms.md`.
+Do NOT fetch the website — the local file covers all needed content.
 
 ## Naming conventions
 
