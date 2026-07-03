@@ -226,3 +226,35 @@ test "WellKnown points correctly classified in rendered image" {
         }
     }
 }
+
+test "deep zoom render produces valid output" {
+    m.buildPalette();
+
+    const w: i32 = 32;
+    const h: i32 = 32;
+    // Seahorse Valley coordinates — exercises the perturbation path
+    // with f64 fallback (max_iters > 2048 triggers the threshold).
+    const view = m.ViewState{
+        .center_x = -1.785897,
+        .center_y = 0.000055,
+        .range = 2.257306e-3,
+        .max_iters = 8192,
+    };
+
+    const img = rl.genImageColor(w, h, .black);
+    defer rl.unloadImage(img);
+
+    const pixels = @as([*]u8, @ptrCast(img.data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+    const timed_out = try renderer.renderMandelbrot(pixels, @intCast(w), @intCast(h), view, true, 0, rl.getTime, null);
+    try testing.expect(!timed_out);
+
+    // Reference point at the center is exterior — must be colored.
+    try expectPixelNotBlack(pixels, @intCast(w), @intCast(h), @intCast(w / 2), @intCast(h / 2));
+
+    const total = @as(usize, @intCast(w * h));
+    const non_black = countNonBlack(pixels);
+    // At least one black (interior) pixel exists.
+    try testing.expect(non_black < total);
+    // At least one colored (exterior) pixel exists.
+    try testing.expect(non_black > 0);
+}
