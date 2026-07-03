@@ -303,3 +303,71 @@ test "renderer reports timeout with short deadline" {
     // Not all rows were rendered.
     try testing.expect(non_black < total);
 }
+
+/// Independent ground-truth Mandelbrot iteration in pure f64.
+/// Returns `true` if the point is interior (never escaped within max_iters).
+/// Purpose-built for integration testing — shares no code with
+/// mandelbrot.zig's iteration functions.
+fn groundTruthInterior(cx: f64, cy: f64, max_iters: u32) bool {
+    var zx: f64 = cx;
+    var zy: f64 = cy;
+    var i: u32 = 0;
+    while (i < max_iters) : (i += 1) {
+        const zx2 = zx * zx;
+        const zy2 = zy * zy;
+        if (zx2 + zy2 > 4.0) return false;
+        zy = 2.0 * zx * zy + cy;
+        zx = zx2 - zy2 + cx;
+    }
+    return true;
+}
+
+test "every pixel classification matches ground truth at 128 iters" {
+    const max_iters: u32 = 128;
+    const w: i32 = 64;
+    const h: i32 = 64;
+
+    const view = m.ViewState{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE,
+        .max_iters = max_iters,
+    };
+
+    // 1. Render with the full pipeline.
+    m.buildPalette();
+    const img = rl.genImageColor(w, h, .black);
+    defer rl.unloadImage(img);
+    const pixels = @as([*]u8, @ptrCast(img.data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+    const timed_out = try renderer.renderMandelbrot(pixels, @intCast(w), @intCast(h), view, true, 0, rl.getTime, null);
+    try testing.expect(!timed_out);
+
+    // 2. Pixel-to-complex mapping (must match renderer.zig).
+    const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
+    const range_x = view.range;
+    const range_y = view.range / aspect;
+    const left = view.center_x + view.offset_x - range_x / 2.0;
+    const top = view.center_y + view.offset_y - range_y / 2.0;
+
+    var mismatch: usize = 0;
+    var interior: usize = 0;
+    var exterior: usize = 0;
+
+    for (0..@as(usize, @intCast(h))) |py| {
+        const cy = top + @as(f64, @floatFromInt(py)) * range_y / @as(f64, @floatFromInt(h));
+        for (0..@as(usize, @intCast(w))) |px| {
+            const cx = left + @as(f64, @floatFromInt(px)) * range_x / @as(f64, @floatFromInt(w));
+
+            const gt_interior = groundTruthInterior(cx, cy, max_iters);
+            const idx = (py * @as(usize, @intCast(w)) + px) * 4;
+            const renderer_black = isPixelBlack(pixels, idx);
+
+            if (gt_interior != renderer_black) mismatch += 1;
+            if (gt_interior) interior += 1 else exterior += 1;
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 0), mismatch);
+    try testing.expect(interior > 0);
+    try testing.expect(exterior > 0);
+}
