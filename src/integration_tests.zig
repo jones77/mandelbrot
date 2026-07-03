@@ -172,3 +172,57 @@ test "all three algorithms agree on interior/exterior classification" {
     try testing.expectEqual(@as(usize, 0), mismatch);
     try testing.expect(exterior > 0);
 }
+
+fn complexToPixel(cx: f64, cy: f64, view: m.ViewState, w: i32, h: i32) struct { x: f64, y: f64 } {
+    const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
+    const range_x = view.range;
+    const range_y = view.range / aspect;
+    const left = view.center_x - range_x / 2.0;
+    const top = view.center_y - range_y / 2.0;
+    return .{
+        .x = ((cx - left) / range_x) * @as(f64, @floatFromInt(w)),
+        .y = ((cy - top) / range_y) * @as(f64, @floatFromInt(h)),
+    };
+}
+
+test "WellKnown points correctly classified in rendered image" {
+    m.buildPalette();
+
+    const w: i32 = 64;
+    const h: i32 = 64;
+    const view = m.ViewState{
+        .center_x = m.INITIAL_CENTER_X,
+        .center_y = m.INITIAL_CENTER_Y,
+        .range = m.INITIAL_RANGE,
+        .max_iters = m.DEFAULT_MAX_ITERS,
+    };
+
+    const img = rl.genImageColor(w, h, .black);
+    defer rl.unloadImage(img);
+
+    const pixels = @as([*]u8, @ptrCast(img.data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+    const timed_out = try renderer.renderMandelbrot(pixels, @intCast(w), @intCast(h), view, true, 0, rl.getTime, null);
+    try testing.expect(!timed_out);
+
+    for (m.WellKnown.points) |p| {
+        // Skip points that need more iterations than our render view.
+        if (p.max_iters > view.max_iters) continue;
+
+        const px = complexToPixel(p.cx, p.cy, view, w, h);
+        // Skip points outside image bounds or within 0.5px of edge
+        // to avoid pixel-boundary ambiguity.
+        if (px.x < 0.5 or px.x >= @as(f64, @floatFromInt(w)) - 0.5) continue;
+        if (px.y < 0.5 or px.y >= @as(f64, @floatFromInt(h)) - 0.5) continue;
+
+        const pix_x: usize = @intFromFloat(@round(px.x));
+        const pix_y: usize = @intFromFloat(@round(px.y));
+        const idx = (pix_y * @as(usize, @intCast(w)) + pix_x) * 4;
+
+        const black = isPixelBlack(pixels, idx);
+        if (p.interior) {
+            try testing.expect(black);
+        } else {
+            try testing.expect(!black);
+        }
+    }
+}
