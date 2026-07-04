@@ -1,9 +1,7 @@
 const std = @import("std");
 const rl = @import("raylib");
 const app = @import("app.zig");
-const PIXEL_CHANNELS = @import("pixel.zig").PIXEL_CHANNELS;
 const m = @import("mandelbrot.zig");
-const renderer = @import("renderer.zig");
 const _ = @import("integration_tests.zig");
 
 const DEFAULT_WIDTH: i32 = 900;
@@ -26,20 +24,10 @@ pub fn main(init: std.process.Init) !void {
     _ = try a.renderFresh(true);
     try a.saveSnapshot();
 
-    // Drain stale input events accumulated during init/rendering so the
-    // main loop starts with a clean input state.  We poll twice: the first
-    // call loads stale events into currentKeyState; the second copies those
-    // into previousKeyState so isKeyPressed() never sees a 0→1 transition
-    // for stale events.
-    rl.pollInputEvents();
-    rl.pollInputEvents();
-    while (rl.getKeyPressed() != .null) {}
-    while (rl.getCharPressed() != 0) {}
-
     // Main loop.
     while (!rl.windowShouldClose()) {
-        try a.handleResize();
         try a.handleInput();
+        try a.handleResize();
         a.drawFrame();
     }
 }
@@ -68,5 +56,3 @@ fn parseTooltipArg(args: std.process.Args) bool {
     }
     return true;
 }
-
-

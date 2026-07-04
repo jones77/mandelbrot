@@ -4,10 +4,20 @@ pub const PALETTE_SIZE: usize = 1024;
 pub const PALETTE_DENSITY: f64 = 4.0;
 pub const INTERIOR_BASE_EPSILON_SQ: f32 = 1e-6;
 pub const PERIODICITY_BASE_EPSILON_SQ: f32 = 1e-6;
-pub const CARDIOID_DIST_SQ: f64 = 0.25;
-pub const BULB_RADIUS_SQ: f64 = 0.0625;
 pub const CARDIOID_Y_MAX: f64 = 3.0 * @sqrt(3.0) / 8.0;
 pub const ESCAPE_RADIUS_SQ: f64 = 4.0;
+
+/// Squared radius of the period-2 bulb: (1/4)² = 0.0625.
+///
+/// The period-2 bulb is the large circular region attached to the left
+/// of the main cardioid at the neck (x ≈ -0.75).  Its centre is at
+/// (-1, 0) and its radius is exactly 0.25.  Any point satisfying
+///
+///   (x + 1)² + y² ≤ BULB_RADIUS_SQ
+///
+/// is inside this bulb and is guaranteed not to escape, so the
+/// recurrence can be skipped.  See isCardioidOrBulb().
+const BULB_RADIUS_SQ: f64 = 0.0625;
 
 /// Pauldelbrot ratio threshold: when |z|² / |Z|² < r, the pixel's orbit
 /// has diverged from the reference (|z| is bounded while |Z| grows).
@@ -15,11 +25,10 @@ pub const GLITCH_RATIO: f32 = 1e-4;
 /// Minimum |Z|² required before applying the Pauldelbrot check — avoids
 /// division by near-zero when the reference hasn't escaped yet.
 pub const GLITCH_MIN_NORM_SQ: f32 = 1e-10;
-pub const DEFAULT_MAX_ITERS: u32 = 2048;
+pub const DEFAULT_MAX_ITERS: u32 = 8192;
 pub const MIN_ITERS: u32 = 16;
 pub const MAX_ITERS_CAP: u32 = 65536;
-pub const AUTO_SCALE_CAP: u32 = 16384;
-pub const AUTO_SCALE_SLOPE: f64 = 0.25;
+
 /// When perturbation is unavailable and max_iters exceeds this, use f64 rebaseFallback
 /// instead of f32 standardPixel to avoid precision loss near the set boundary.
 pub const F32_MAX_ITERS_THRESHOLD: u32 = 2048;
@@ -40,7 +49,7 @@ pub const RenderMethod = enum {
 
 // ========================= Types =========================
 
-pub const Coord = struct {
+const Coord = struct {
     re: f32,
     im: f32,
     pub fn normSq(self: Coord) f32 {
@@ -54,7 +63,7 @@ pub const Coord = struct {
     }
 };
 
-pub const OrbitPoint = struct { zx: f32, zy: f32 };
+const OrbitPoint = struct { zx: f32, zy: f32 };
 
 pub const RefOrbit = struct { zx: f64, zy: f64 };
 
@@ -466,12 +475,6 @@ pub fn groundTruthPixel(cx: f64, cy: f64, max_iters: u32) PointResult {
     return .{ .iter = max_iters, .zx = zx, .zy = zy, .escaped = false };
 }
 
-/// Returns true if the point is inside the Mandelbrot set,
-/// using high-precision ground-truth iteration.
-pub fn classifyPixel(cx: f64, cy: f64, max_iters: u32) bool {
-    return !groundTruthPixel(cx, cy, max_iters).escaped;
-}
-
 /// Well-known Mandelbrot points with verified interior/exterior classification.
 pub const WellKnown = struct {
     pub const Point = struct {
@@ -499,10 +502,16 @@ pub const WellKnown = struct {
 /// Returns true if (cx, cy) lies inside the main cardioid or the period-2 bulb,
 /// where the Mandelbrot recurrence is guaranteed not to escape.
 /// `cy2` is cy * cy (precomputed by the caller).
+///
+/// **Cardioid test** — derived from the cardioid parametric equation:
+/// points inside satisfy `q·(q + x - ¼) ≤ ¼·y²` where `q = (x - ¼)² + y²`.
+///
+/// **Period-2 bulb test** — the bulb centred at (-1, 0) with radius ¼:
+/// points inside satisfy `(x + 1)² + y² ≤ BULB_RADIUS_SQ`.
 pub fn isCardioidOrBulb(cx: f32, cy2: f32) bool {
     const q = (cx - 0.25) * (cx - 0.25) + cy2;
     if (q * (q + (cx - 0.25)) <= 0.25 * cy2) return true;
-    if ((cx + 1.0) * (cx + 1.0) + cy2 <= 0.0625) return true;
+    if ((cx + 1.0) * (cx + 1.0) + cy2 <= BULB_RADIUS_SQ) return true;
     return false;
 }
 
@@ -538,18 +547,6 @@ pub fn shouldUseF64Fallback(render_method: RenderMethod, pixel_step: f64, max_it
     return render_method == .f64 or
         (render_method == .auto and pixel_step < PIXEL_STEP_F64_THRESHOLD) or
         max_iters > F32_MAX_ITERS_THRESHOLD;
-}
-
-/// Computes the auto-scaled iteration count based on zoom depth.
-/// At INITIAL_RANGE returns DEFAULT_MAX_ITERS (2048). At deeper zoom,
-/// scales iter count logarithmically up to AUTO_SCALE_CAP (16384).
-pub fn computeAutoZoomIters(range: f64) u32 {
-    const zoom_factor = INITIAL_RANGE / range;
-    const log2_zf = @log(zoom_factor) / @log(2.0);
-    const log2_start = @log(@as(f64, @floatFromInt(DEFAULT_MAX_ITERS))) / @log(2.0);
-    const target_f = @exp2(log2_start + log2_zf * AUTO_SCALE_SLOPE);
-    const clamped = @min(target_f, @as(f64, @floatFromInt(AUTO_SCALE_CAP)));
-    return nextPowerOf2(@as(u32, @intFromFloat(clamped)));
 }
 
 /// Maps screen pixel coordinates to complex coordinates.
@@ -819,15 +816,6 @@ test "zoom math round-trip" {
 
     try testing.expect(view.range > 0);
     try testing.expect(view.range < old_range);
-}
-
-test "zoom auto-scale iterations" {
-    // At INITIAL_RANGE, zoom factor = 1 → target stays at baseline 2048
-    try testing.expectEqual(DEFAULT_MAX_ITERS, computeAutoZoomIters(INITIAL_RANGE));
-    // At 100× zoom, target should scale up to 8192
-    try testing.expectEqual(@as(u32, 8192), computeAutoZoomIters(INITIAL_RANGE / 100.0));
-    // At extreme zoom, target should be capped at AUTO_SCALE_CAP
-    try testing.expectEqual(@as(u32, AUTO_SCALE_CAP), computeAutoZoomIters(INITIAL_RANGE / 1e9));
 }
 
 // --- Perturbation boundary checking tests ---
@@ -1224,6 +1212,151 @@ test "perturbation matches groundTruthPixel at exterior points" {
         const mu_gt: f32 = @floatCast(mu_gt_f64);
         try testing.expectApproxEqAbs(mu_gt, mu_p, c.tolerance);
     }
+}
+
+test "groundTruthPixel at Seahorse Valley deep zoom" {
+    // Exact coordinates where rendering artifacts were reported.
+    // groundTruthPixel is pure f64 with no early-outs — it should produce
+    // correct results at ANY zoom depth and iteration count.
+    const cx: f64 = -1.92715562;
+    const cy: f64 = 0.00134343;
+    const max_iters: u32 = 1 << 16;
+
+    const result = groundTruthPixel(cx, cy, max_iters);
+    try testing.expect(std.math.isFinite(result.zx));
+    try testing.expect(std.math.isFinite(result.zy));
+
+    if (result.escaped) {
+        try testing.expect(result.iter < max_iters);
+        try testing.expect(result.zx * result.zx + result.zy * result.zy > 4.0);
+        const mu = smoothIteration(result.iter, result.zx * result.zx + result.zy * result.zy);
+        try testing.expect(std.math.isFinite(mu));
+        try testing.expect(mu >= 0);
+    } else {
+        try testing.expect(result.iter == max_iters);
+        try testing.expect(result.zx * result.zx + result.zy * result.zy <= 4.0);
+    }
+}
+
+test "computeReference at deep zoom with 65536 iterations" {
+    const cx: f64 = -1.92715562;
+    const cy: f64 = 0.00134343;
+    const max_iters: u32 = 1 << 16;
+
+    const orbit = try computeReference(cx, cy, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
+
+    try testing.expectEqual(@as(usize, 65536), orbit.len);
+
+    // First entry must match the starting coordinate.
+    try testing.expectApproxEqAbs(cx, orbit[0].zx, 1e-15);
+    try testing.expectApproxEqAbs(cy, orbit[0].zy, 1e-15);
+
+    // Determine the last iteration before Z overflow (non-finite).
+    // After overflow, ALL remaining entries must be non-finite.
+    var first_nan: ?usize = null;
+    for (orbit, 0..) |o, i| {
+        if (!std.math.isFinite(o.zx) or !std.math.isFinite(o.zy)) {
+            first_nan = i;
+            break;
+        }
+    }
+
+    if (first_nan) |overflow_iter| {
+        try testing.expect(overflow_iter >= 2);
+
+        // All entries after first_nan must be non-finite.
+        for (orbit[overflow_iter..], overflow_iter..) |o, i| {
+            if (std.math.isFinite(o.zx) and std.math.isFinite(o.zy)) {
+                std.debug.print("entry {} is finite after first non-finite at {}\n", .{ i, overflow_iter });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "renderPerturbationPixel offset precision at deep zoom" {
+    const cx: f64 = -1.92715562;
+    const cy: f64 = 0.00134343;
+    const range: f64 = 1.02862035e-21;
+    const max_iters: u32 = 1 << 16;
+
+    const orbit = try computeReference(cx, cy, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
+
+    // Offsets span ±0.5×range, with several intermediate positions.
+    const offsets = [_]struct { dx: f64, dy: f64 }{
+        .{ .dx = 0.0, .dy = 0.0 },
+        .{ .dx = -0.5 * range, .dy = 0.0 },
+        .{ .dx = 0.5 * range, .dy = 0.0 },
+        .{ .dx = 0.0, .dy = -0.5 * range },
+        .{ .dx = 0.0, .dy = 0.5 * range },
+        .{ .dx = -0.25 * range, .dy = -0.25 * range },
+        .{ .dx = 0.25 * range, .dy = 0.25 * range },
+        .{ .dx = -0.1 * range, .dy = 0.1 * range },
+        .{ .dx = 0.1 * range, .dy = -0.1 * range },
+    };
+
+    for (offsets) |off| {
+        const pix_cx = cx + off.dx;
+        const pix_cy = cy + off.dy;
+        const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO);
+        const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
+
+        if (gt.escaped) {
+            try testing.expect(mu_rp < @as(f32, @floatFromInt(max_iters)));
+            const mu_gt_f64 = smoothIteration(gt.iter, gt.zx * gt.zx + gt.zy * gt.zy);
+            const mu_gt: f32 = @floatCast(mu_gt_f64);
+            // Tolerance of 1.0 is generous — accounts for f32 round-off in
+            // smoothIteration and the perturbation approximation at extreme
+            // iteration counts. Ground truth is f64 exact.
+            try testing.expectApproxEqAbs(mu_gt, mu_rp, 1.0);
+        } else {
+            try testing.expect(mu_rp >= @as(f32, @floatFromInt(max_iters)));
+        }
+    }
+}
+
+test "f64 fallback precision loss at deep zoom" {
+    // At range ≈ 1e-21, the per-pixel complex step is ~3e-23, far below the
+    // f64 ULP (~2e-16) at |cx| ≈ 1.93.  The pixel-centre formula:
+    //
+    //   cx = left + (px + 0.5) * range_x / w
+    //
+    // produces the SAME f64 value for EVERY pixel because the step term rounds
+    // to zero when added to |left| ≈ 1.93.
+    //
+    // This means rebaseFallback(cx, cy, cx, cy, 0, max_iters) returns the same
+    // mu for every pixel — the f64 fallback CANNOT render deep zoom correctly.
+
+    const cx: f64 = -1.92715562;
+    const cy: f64 = 0.00134343;
+    const range: f64 = 1.02862035e-21;
+    const max_iters: u32 = 1 << 16;
+    const w: usize = 16;
+
+    const range_x = range;
+    const left = cx - range_x / 2.0;
+
+    // Pixel-centre formula for two adjacent pixels.
+    const cx_f64_0 = left + (0.0 + 0.5) * range_x / @as(f64, @floatFromInt(w));
+    const cx_f64_1 = left + (1.0 + 0.5) * range_x / @as(f64, @floatFromInt(w));
+
+    // The step term is so small that both map to the same f64 value.
+    // (The difference range/w ≈ 6.4e-23 rounds away when added to |left| ≈ 1.93.)
+    try testing.expect(cx_f64_0 == cx_f64_1);
+
+    const mu_0 = rebaseFallback(cx_f64_0, cy, cx_f64_0, cy, 0, max_iters);
+    const mu_1 = rebaseFallback(cx_f64_1, cy, cx_f64_1, cy, 0, max_iters);
+
+    // Both pixels get identical mu — the f64 fallback has no way to
+    // distinguish them at this zoom depth.
+    try testing.expect(mu_0 == mu_1);
+
+    // Verify shouldUseF64Fallback correctly identifies this as needing f64.
+    const pixel_step = range / @as(f64, @floatFromInt(w));
+    try testing.expect(shouldUseF64Fallback(.auto, pixel_step, max_iters));
+    try testing.expect(shouldUseF64Fallback(.auto, pixel_step, DEFAULT_MAX_ITERS));
 }
 
 test "rebaseFallback matches groundTruthPixel" {

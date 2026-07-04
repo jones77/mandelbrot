@@ -6,7 +6,6 @@ const logEvent = @import("log.zig").logEvent;
 const PIXEL_CHANNELS = @import("pixel.zig").PIXEL_CHANNELS;
 
 const DEFAULT_W: i32 = 900;
-const DEFAULT_H: i32 = 800;
 
 const LINE1_H: i32 = 32;
 const LINE2_H: i32 = 28;
@@ -21,7 +20,6 @@ const BTN_RESET: i32 = 55;
 const TB_CAP: usize = 127;
 const MAX_HISTORY: usize = 64;
 const MIN_SELECTION_PX: f64 = 8.0;
-const RENDER_TIMEOUT_S: f64 = 60.0;
 const CLIPBOARD_BUF: usize = 256;
 
 const COL_BG = rl.Color{ .r = 240, .g = 240, .b = 245, .a = 255 };
@@ -39,27 +37,11 @@ const COL_BTN_BORDER = rl.Color{ .r = 180, .g = 180, .b = 190, .a = 255 };
 const COL_TIMEOUT = rl.Color{ .r = 200, .g = 80, .b = 40, .a = 255 };
 const COL_DRAG_HIGHLIGHT = rl.Color{ .r = 255, .g = 30, .b = 30, .a = 200 };
 
-const ANIM_DURATION_MIN: f64 = 0.1;
-const ANIM_DURATION_MAX: f64 = 0.5;
-const ANIM_AREA_RATIO_HI: f64 = 0.9;
-const ANIM_AREA_RATIO_LO: f64 = 0.1;
-const HIGHLIGHT_FADE_S: f64 = 2.0;
-
-const TEXT_PAD_X: i32 = 6;
-const TEXT_PAD_Y: i32 = 4;
-const BTN_TEXT_PAD_X: i32 = 6;
-const BTN_TEXT_PAD_Y: i32 = 5;
-const ARROW_PAD_X: i32 = 6;
-const ARROW_PAD_Y: i32 = 3;
-const HINT_PAD_X: i32 = 10;
+const PAD_X: i32 = 6;
 const HINT_PAD_Y: i32 = 4;
-const CURSOR_W: i32 = 2;
-const CURSOR_H: i32 = 18;
 
 const FONT_SIZE_LG: f32 = 18.0;
 const FONT_SIZE_BTN: i32 = 18;
-const FONT_SIZE_ARROW: i32 = 18;
-const FONT_SIZE_TIMEOUT: i32 = 18;
 
 const FONT_LOAD_SIZE: i32 = 24;
 const ASCII_PRN_MIN: i32 = 32;
@@ -69,13 +51,6 @@ const CP_ARROW_LEFT: i32 = 0x2190;
 const CP_ARROW_RIGHT: i32 = 0x2192;
 
 const TOOLTIP_LABEL = "[x] tooltip";
-const TOOLTIP_LABEL_OFF = "[ ] tooltip";
-const TOOLTIP_DELAY_S: f64 = 2.0;
-const TOOLTIP_MOVE_THRESHOLD_PX: i32 = 2;
-const TOOLTIP_OFFSET_X: i32 = 12;
-const TOOLTIP_OFFSET_Y: i32 = 12;
-const TOOLTIP_PAD_X: i32 = 8;
-const TOOLTIP_PAD_Y: i32 = 4;
 
 const TextBuf = struct {
     buf: [TB_CAP + 1]u8,
@@ -174,15 +149,6 @@ const ZoomAnimation = struct {
     active: bool,
 };
 
-const HighlightRect = struct {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    start_time: f64,
-    active: bool,
-};
-
 const HistoryEntry = struct {
     view: m.ViewState,
     w: usize,
@@ -221,6 +187,11 @@ fn truncateFuture(history: []HistoryEntry, history_len: *usize, index: usize) vo
 }
 
 fn computeAnimDuration(from_view: m.ViewState, to_view: m.ViewState) f64 {
+    const ANIM_DURATION_MIN: f64 = 0.1;
+    const ANIM_DURATION_MAX: f64 = 0.5;
+    const ANIM_AREA_RATIO_HI: f64 = 0.9;
+    const ANIM_AREA_RATIO_LO: f64 = 0.1;
+
     const area_from = from_view.range * from_view.range;
     const area_to = to_view.range * to_view.range;
     const area_ratio = @min(area_from, area_to) / @max(area_from, area_to);
@@ -328,7 +299,6 @@ pub const App = struct {
     drag: DragState,
     anim: ZoomAnimation,
     anim_texture: ?rl.Texture2D,
-    highlight: HighlightRect,
     tb_buf: TextBuf,
     tb_active: bool,
     rows_completed: ?[]bool,
@@ -384,7 +354,6 @@ pub const App = struct {
                 .active = false,
             },
             .anim_texture = null,
-            .highlight = HighlightRect{ .x = 0, .y = 0, .w = 0, .h = 0, .start_time = 0, .active = false },
             .tb_buf = TextBuf.init(),
             .tb_active = false,
             .rows_completed = null,
@@ -495,6 +464,8 @@ pub const App = struct {
     }
 
     pub fn renderFresh(self: *App, clear: bool) !bool {
+        const RENDER_TIMEOUT_S: f64 = 60.0;
+
         const w: usize = @intCast(self.image.width);
         const h: usize = @intCast(self.image.height);
         const pixels = @as([*]u8, @ptrCast(self.image.data))[0 .. w * h * PIXEL_CHANNELS];
@@ -510,8 +481,13 @@ pub const App = struct {
         }
 
         self.render_timed_out = try renderer.renderMandelbrot(
-            pixels, w, h, self.view, clear,
-            RENDER_TIMEOUT_S, rl.getTime,
+            pixels,
+            w,
+            h,
+            self.view,
+            clear,
+            RENDER_TIMEOUT_S,
+            rl.getTime,
             self.rows_completed,
         );
         if (self.render_timed_out) logEvent(.render, "timeout", .{});
@@ -533,27 +509,34 @@ pub const App = struct {
 
     pub fn saveSnapshot(self: *App) !void {
         try pushHistory(
-            &self.history, &self.history_len, &self.history_ptr,
-            self.view, self.pixelData(),
-            @intCast(self.image.width), @intCast(self.image.height),
+            &self.history,
+            &self.history_len,
+            &self.history_ptr,
+            self.view,
+            self.pixelData(),
+            @intCast(self.image.width),
+            @intCast(self.image.height),
         );
     }
 
-    fn setupZoomOutHighlight(self: *App, from_view: m.ViewState, to_view: m.ViewState) void {
-        const aspect = self.viewportAspect();
-        const vph = self.viewportDrawHeight();
-        const draw_w: f32 = @floatFromInt(self.render_w);
-        const draw_h: f32 = @floatFromInt(vph);
-        // Effective center difference (handles deep zoom sub-precise offsets).
-        const cx_diff = (from_view.center_x - to_view.center_x) + (from_view.offset_x - to_view.offset_x);
-        const cy_diff = (from_view.center_y - to_view.center_y) + (from_view.offset_y - to_view.offset_y);
-        const r_diff = to_view.range - from_view.range;
-        self.highlight.x = @floatCast((cx_diff - r_diff / 2.0) / to_view.range * draw_w);
-        self.highlight.y = @floatCast((cy_diff - r_diff / (2.0 * aspect)) / (to_view.range / aspect) * draw_h + @as(f32, @floatFromInt(TOTAL_TOP)));
-        self.highlight.w = @floatCast(from_view.range / to_view.range * draw_w);
-        self.highlight.h = @floatCast(from_view.range / to_view.range * draw_h);
-        self.highlight.start_time = rl.getTime();
-        self.highlight.active = true;
+    /// Capture the current frame, compute animation state from `from_view`
+    /// to `to_view`, and start the timer.
+    /// Must be called before modifying `self.view` or the main texture.
+    fn startZoomAnimationTo(self: *App, from_view: m.ViewState, to_view: m.ViewState) !void {
+        try self.captureAnimationFrame();
+
+        self.anim.from_view = from_view;
+        self.anim.to_view = to_view;
+        self.anim.duration = computeAnimDuration(from_view, to_view);
+
+        self.anim.start_time = rl.getTime();
+        self.anim.active = true;
+        logEvent(.anim, "start {s} dur={d:.3} from={d:.6} to={d:.6}", .{
+            if (to_view.range > from_view.range) "out" else "in",
+            self.anim.duration,
+            from_view.range,
+            to_view.range,
+        });
     }
 
     fn startZoomAnimation(self: *App, to_entry: *const HistoryEntry) !void {
@@ -562,17 +545,7 @@ pub const App = struct {
         const from_view = self.view;
         const to_view = to_entry.view;
 
-        if (to_view.range > from_view.range) {
-            self.setupZoomOutHighlight(from_view, to_view);
-        } else {
-            self.highlight.active = false;
-        }
-
-        try self.captureAnimationFrame();
-
-        self.anim.from_view = from_view;
-        self.anim.to_view = to_view;
-        self.anim.duration = computeAnimDuration(from_view, to_view);
+        try self.startZoomAnimationTo(from_view, to_view);
 
         // Immediately restore destination cached image to main texture.
         if (to_entry.w == @as(usize, @intCast(self.image.width)) and
@@ -586,13 +559,26 @@ pub const App = struct {
         }
         self.view = to_view;
         self.syncTextBox();
+    }
 
-        self.anim.start_time = rl.getTime();
-        self.anim.active = true;
-        logEvent(.anim, "start {s} dur={d:.3} from={d:.6} to={d:.6}", .{
-            if (to_view.range > from_view.range) "out" else "in",
-            self.anim.duration, from_view.range, to_view.range,
-        });
+    fn navigateHistoryBack(self: *App) !void {
+        if (self.history_ptr > 0) {
+            self.history_ptr -= 1;
+            try self.startZoomAnimation(&self.history[self.history_ptr]);
+            logEvent(.history, "back entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
+        } else {
+            logEvent(.history, "back ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
+        }
+    }
+
+    fn navigateHistoryForward(self: *App) !void {
+        if (self.history_ptr + 1 < self.history_len) {
+            self.history_ptr += 1;
+            try self.startZoomAnimation(&self.history[self.history_ptr]);
+            logEvent(.history, "forward entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
+        } else {
+            logEvent(.history, "forward ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
+        }
     }
 
     fn drawAnimFrame(self: *App) void {
@@ -656,17 +642,77 @@ pub const App = struct {
         }
     }
 
-    fn drawHighlight(self: *App) void {
-        const h = &self.highlight;
-        if (!h.active) return;
-        const elapsed = rl.getTime() - h.start_time;
-        if (elapsed >= HIGHLIGHT_FADE_S) {
-            h.active = false;
+    /// Draw the tooltip-enabled/disabled checkbox — right-aligned on the
+    /// second line of the toolbar.  Clicking it toggles tooltip_enabled.
+    fn drawTooltipCheckbox(self: *App, mx: i32, my: i32) void {
+        const TOOLTIP_LABEL_OFF = "[ ] tooltip";
+        const chk_label = if (self.tooltip_enabled) TOOLTIP_LABEL else TOOLTIP_LABEL_OFF;
+        const chk_w = self.tooltip_label_w;
+        const chk_x = @as(f32, @floatFromInt(self.render_w)) - @as(f32, @floatFromInt(TOP_PAD)) - chk_w;
+        const chk_y = @as(f32, @floatFromInt(LINE1_H)) + @as(f32, @floatFromInt(HINT_PAD_Y));
+        const hover = @as(f32, @floatFromInt(mx)) >= chk_x and @as(f32, @floatFromInt(mx)) < chk_x + chk_w and
+            my >= LINE1_H + HINT_PAD_Y and my < LINE1_H + HINT_PAD_Y + @as(i32, @intFromFloat(FONT_SIZE_LG));
+        rl.drawTextEx(self.ui_font, chk_label, .{ .x = chk_x, .y = chk_y }, FONT_SIZE_LG, 1, if (hover) COL_TEXT else COL_HINT);
+    }
+
+    /// Draw a coordinate tooltip at the mouse position (2-second hover delay,
+    /// pixel-center coordinates).  Only renders when tooltip_enabled is true
+    /// and the mouse is inside the viewport.
+    fn drawCoordinateTooltip(self: *App, mx: i32, my: i32) void {
+        const TOOLTIP_DELAY_S: f64 = 2.0;
+        const TOOLTIP_MOVE_THRESHOLD_PX: i32 = 2;
+        const TOOLTIP_OFFSET_X: i32 = 12;
+        const TOOLTIP_OFFSET_Y: i32 = 12;
+        const TOOLTIP_PAD_X: i32 = 8;
+        const TOOLTIP_PAD_Y: i32 = 4;
+
+        if (!self.tooltip_enabled) return;
+        const viewport_y = TOTAL_TOP;
+        if (my < viewport_y or my >= self.render_h) {
+            self.tooltip_mouse_still_since = rl.getTime();
+            self.tooltip_last_mx = mx;
+            self.tooltip_last_my = my;
             return;
         }
-        const alpha: u8 = @intFromFloat(255.0 * (1.0 - elapsed / HIGHLIGHT_FADE_S));
-        const color = rl.Color{ .r = 255, .g = 30, .b = 30, .a = alpha };
-        rl.drawRectangleLines(@intFromFloat(h.x), @intFromFloat(h.y), @intFromFloat(h.w), @intFromFloat(h.h), color);
+
+        const dpi_f: f64 = @floatFromInt(self.dpi_scale);
+        const phys_px = @as(f64, @floatFromInt(mx)) * dpi_f;
+        const phys_py = (@as(f64, @floatFromInt(my)) - @as(f64, @floatFromInt(viewport_y))) * dpi_f;
+        const w_f: f64 = @floatFromInt(self.image.width);
+        const h_f: f64 = @floatFromInt(self.image.height);
+        if (phys_px < 0 or phys_px >= w_f or phys_py < 0 or phys_py >= h_f) return;
+
+        const moved = @abs(mx - self.tooltip_last_mx) > TOOLTIP_MOVE_THRESHOLD_PX or
+            @abs(my - self.tooltip_last_my) > TOOLTIP_MOVE_THRESHOLD_PX;
+        if (moved) {
+            self.tooltip_mouse_still_since = rl.getTime();
+            self.tooltip_last_mx = mx;
+            self.tooltip_last_my = my;
+        }
+
+        if (rl.getTime() - self.tooltip_mouse_still_since < TOOLTIP_DELAY_S) return;
+
+        const px: f64 = @floor(phys_px);
+        const py: f64 = @floor(phys_py);
+        const coord = self.pixelCenterToComplex(px, py);
+
+        var tooltip_buf: [128]u8 = undefined;
+        const tooltip_text = std.fmt.bufPrintZ(&tooltip_buf, "x={d:.8}  y={d:.8}", .{ coord.x, coord.y }) catch unreachable;
+
+        const tt_size = rl.measureTextEx(self.ui_font, tooltip_text, FONT_SIZE_LG, 1);
+        const tt_w = tt_size.x + @as(f32, @floatFromInt(TOOLTIP_PAD_X * 2));
+        const tt_h = tt_size.y + @as(f32, @floatFromInt(TOOLTIP_PAD_Y * 2));
+
+        const c_x: f32 = @floatFromInt(mx + TOOLTIP_OFFSET_X);
+        const c_y: f32 = @floatFromInt(my + TOOLTIP_OFFSET_Y);
+        const max_x = @as(f32, @floatFromInt(self.render_w)) - tt_w - @as(f32, @floatFromInt(TOP_PAD));
+        const max_y = @as(f32, @floatFromInt(self.render_h)) - tt_h - @as(f32, @floatFromInt(TOP_PAD));
+        const tt_x = @min(max_x, @max(@as(f32, @floatFromInt(TOP_PAD)), c_x));
+        const tt_y = @min(max_y, @max(@as(f32, @floatFromInt(viewport_y)), c_y));
+
+        const bg = rl.Rectangle{ .x = tt_x, .y = tt_y, .width = tt_w, .height = tt_h };
+        rl.drawRectangleRounded(bg, 0.3, 4, .{ .r = 30, .g = 30, .b = 40, .a = 200 });
+        rl.drawTextEx(self.ui_font, tooltip_text, .{ .x = tt_x + @as(f32, @floatFromInt(TOOLTIP_PAD_X)), .y = tt_y + @as(f32, @floatFromInt(TOOLTIP_PAD_Y)) }, FONT_SIZE_LG, 1, .white);
     }
 
     fn syncTextBox(self: *App) void {
@@ -788,23 +834,11 @@ pub const App = struct {
                     tb_click_consumed = true;
                 }
                 if (mx >= tb.arrow_l_x and mx < tb.arrow_l_x + BTN_ARROW and my >= tb_y and my < tb_y + TB_H) {
-                    if (self.history_ptr > 0) {
-                        self.history_ptr -= 1;
-                        try self.startZoomAnimation(&self.history[self.history_ptr]);
-                        logEvent(.history, "back entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
-                    } else {
-                        logEvent(.history, "back ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
-                    }
+                    try self.navigateHistoryBack();
                     tb_click_consumed = true;
                 }
                 if (mx >= tb.arrow_r_x and mx < tb.arrow_r_x + BTN_ARROW and my >= tb_y and my < tb_y + TB_H) {
-                    if (self.history_ptr + 1 < self.history_len) {
-                        self.history_ptr += 1;
-                        try self.startZoomAnimation(&self.history[self.history_ptr]);
-                        logEvent(.history, "forward entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
-                    } else {
-                        logEvent(.history, "forward ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
-                    }
+                    try self.navigateHistoryForward();
                     tb_click_consumed = true;
                 }
                 if (mx >= tb.inc_x and mx < tb.inc_x + BTN_ITER and my >= tb_y and my < tb_y + TB_H) {
@@ -860,26 +894,10 @@ pub const App = struct {
         }
 
         if (!self.tb_active) {
-            const key_left = rl.isKeyPressed(.left);
-            const key_right = rl.isKeyPressed(.right);
-            if (key_left or key_right) {
-                if (key_left) {
-                    if (self.history_ptr > 0) {
-                        self.history_ptr -= 1;
-                        try self.startZoomAnimation(&self.history[self.history_ptr]);
-                        logEvent(.history, "back entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
-                    } else {
-                        logEvent(.history, "back ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
-                    }
-                } else {
-                    if (self.history_ptr + 1 < self.history_len) {
-                        self.history_ptr += 1;
-                        try self.startZoomAnimation(&self.history[self.history_ptr]);
-                        logEvent(.history, "forward entry={d} range={d:.6} anim={s}", .{ self.history_ptr, self.history[self.history_ptr].view.range, if (self.anim.active) "active" else "idle" });
-                    } else {
-                        logEvent(.history, "forward ignored ptr={d} len={d} anim={s}", .{ self.history_ptr, self.history_len, if (self.anim.active) "active" else "idle" });
-                    }
-                }
+            if (rl.isKeyPressed(.left)) {
+                try self.navigateHistoryBack();
+            } else if (rl.isKeyPressed(.right)) {
+                try self.navigateHistoryForward();
             }
         }
         {
@@ -967,43 +985,38 @@ pub const App = struct {
 
             truncateFuture(&self.history, &self.history_len, self.history_ptr + 1);
 
-            {
-                const from_view = self.view;
-                const to_view = m.ViewState{
-                    .center_x = delta.center_x,
-                    .center_y = delta.center_y,
-                    .offset_x = delta.offset_x,
-                    .offset_y = delta.offset_y,
-                    .range = new_range,
-                    .max_iters = self.view.max_iters,
-                };
+            const from_view = self.view;
+            const to_view = m.ViewState{
+                .center_x = delta.center_x,
+                .center_y = delta.center_y,
+                .offset_x = delta.offset_x,
+                .offset_y = delta.offset_y,
+                .range = new_range,
+                .max_iters = self.view.max_iters,
+            };
 
-                try self.captureAnimationFrame();
+            try self.captureAnimationFrame();
 
-                self.anim.from_view = from_view;
-                self.anim.to_view = to_view;
-                self.anim.duration = computeAnimDuration(from_view, to_view);
-            }
-
-            self.view.center_x = delta.center_x;
-            self.view.center_y = delta.center_y;
-            self.view.offset_x = delta.offset_x;
-            self.view.offset_y = delta.offset_y;
-            self.view.range = new_range;
-
-            const target_iters = m.computeAutoZoomIters(self.view.range);
-            if (target_iters > self.view.max_iters and target_iters <= m.AUTO_SCALE_CAP) {
-                self.view.max_iters = target_iters;
-            }
+            self.view = to_view;
 
             _ = try self.renderFresh(true);
+
+            // Start animation timer AFTER the blocking render so the render
+            // doesn't eat the animation time.
+            self.anim.from_view = from_view;
+            self.anim.to_view = to_view;
+            self.anim.duration = computeAnimDuration(from_view, to_view);
+            self.anim.start_time = rl.getTime();
+            self.anim.active = true;
+            logEvent(.anim, "start in dur={d:.3} from={d:.6} to={d:.6}", .{
+                self.anim.duration,
+                from_view.range,
+                to_view.range,
+            });
 
             if (self.history_len < MAX_HISTORY) {
                 try self.saveSnapshot();
             }
-
-            self.anim.start_time = rl.getTime();
-            self.anim.active = true;
         }
 
         self.syncTextBox();
@@ -1021,6 +1034,8 @@ pub const App = struct {
     }
 
     fn drawToolbarButton(self: *const App, x: i32, w: i32, label: [:0]const u8, label_w: f32, btn_y: i32, btn_h: i32, mx: i32, my: i32) void {
+        const BTN_TEXT_PAD_Y: i32 = 5;
+
         const hover = mx >= x and mx < x + w and my >= btn_y and my < btn_y + btn_h;
         rl.drawRectangle(x, btn_y, w, btn_h, if (hover) COL_BTN_BG_HOVER else COL_BTN_BG);
         rl.drawRectangleLines(x, btn_y, w, btn_h, COL_BTN_BORDER);
@@ -1029,13 +1044,70 @@ pub const App = struct {
     }
 
     fn drawToolbarArrow(self: *const App, x: i32, cp: i32, btn_y: i32, btn_h: i32, mx: i32, my: i32) void {
+        const FONT_SIZE_ARROW: i32 = 18;
+        const ARROW_PAD_Y: i32 = 3;
+
         const hover = mx >= x and mx < x + BTN_ARROW and my >= btn_y and my < btn_y + btn_h;
         rl.drawRectangle(x, btn_y, BTN_ARROW, btn_h, if (hover) COL_BTN_BG_HOVER else COL_BTN_BG);
         rl.drawRectangleLines(x, btn_y, BTN_ARROW, btn_h, COL_BTN_BORDER);
-        rl.drawTextCodepoint(self.ui_font, cp, .{ .x = @floatFromInt(x + ARROW_PAD_X), .y = @floatFromInt(btn_y + ARROW_PAD_Y) }, FONT_SIZE_ARROW, COL_BTN_TEXT);
+        rl.drawTextCodepoint(self.ui_font, cp, .{ .x = @floatFromInt(x + PAD_X), .y = @floatFromInt(btn_y + ARROW_PAD_Y) }, FONT_SIZE_ARROW, COL_BTN_TEXT);
+    }
+
+    fn drawToolbar(self: *const App, mx: i32, my: i32) void {
+        const TEXT_PAD_Y: i32 = 4;
+        const CURSOR_W: i32 = 2;
+        const CURSOR_H: i32 = 18;
+        const HINT_PAD_X: i32 = 10;
+
+        rl.drawRectangle(0, 0, self.render_w, LINE1_H, COL_BAR);
+        rl.drawRectangle(0, LINE1_H, self.render_w, 1, COL_SEP);
+        rl.drawRectangle(0, LINE1_H + 1, self.render_w, LINE2_H, COL_BAR);
+        rl.drawRectangle(0, TOTAL_TOP - 1, self.render_w, 1, COL_SEP);
+
+        rl.drawTextEx(self.ui_font, "drag to zoom    \xe2\x86\x90 left arrow zooms out    \xe2\x86\x92 right arrow zooms back in    press R to reset", .{ .x = @floatFromInt(HINT_PAD_X), .y = @floatFromInt(LINE1_H + HINT_PAD_Y) }, FONT_SIZE_LG, 1, COL_HINT);
+
+        const tb_y: i32 = (LINE1_H - TB_H) / 2;
+        const btn_y: i32 = tb_y;
+        const btn_h: i32 = TB_H;
+        const tb = ToolbarLayout.compute(self.render_w);
+
+        rl.drawRectangle(tb.tb_start_x, tb_y, tb.tb_w, TB_H, COL_TB_BG);
+        rl.drawRectangleLines(tb.tb_start_x, tb_y, tb.tb_w, TB_H, if (self.tb_active) COL_TB_BORDER_ACTIVE else COL_TB_BORDER);
+
+        var display_buf: [CLIPBOARD_BUF]u8 = undefined;
+        const display_text = if (self.tb_active)
+            self.tb_buf.slice()
+        else
+            std.fmt.bufPrintZ(&display_buf, VIEW_FMT, .{
+                self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters,
+            }) catch unreachable;
+        rl.drawTextEx(self.ui_font, display_text, .{ .x = @floatFromInt(tb.tb_start_x + PAD_X), .y = @floatFromInt(tb_y + TEXT_PAD_Y) }, FONT_SIZE_LG, 1.0, COL_TEXT);
+
+        if (self.tb_active) {
+            const blink = @as(u32, @intFromFloat(rl.getTime() * 2.0)) & 1;
+            if (blink == 0) {
+                var cursor_buf: [TB_CAP + 1]u8 = undefined;
+                @memcpy(cursor_buf[0..self.tb_buf.cursor], self.tb_buf.buf[0..self.tb_buf.cursor]);
+                cursor_buf[self.tb_buf.cursor] = 0;
+                const cursor_text = cursor_buf[0..self.tb_buf.cursor :0];
+                const m2 = rl.measureTextEx(self.ui_font, cursor_text, FONT_SIZE_LG, 1.0);
+                const cx = tb.tb_start_x + PAD_X + @as(i32, @intFromFloat(m2.x));
+                rl.drawRectangle(cx, tb_y + TEXT_PAD_Y, CURSOR_W, CURSOR_H, COL_TB_BORDER_ACTIVE);
+            }
+        }
+
+        self.drawToolbarArrow(tb.arrow_l_x, CP_ARROW_LEFT, btn_y, btn_h, mx, my);
+        self.drawToolbarArrow(tb.arrow_r_x, CP_ARROW_RIGHT, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.inc_x, BTN_ITER, "inc", self.btn_w_inc, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.dec_x, BTN_ITER, "dec", self.btn_w_dec, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.copy_x, BTN_LG, "copy", self.btn_w_copy, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.paste_x, BTN_LG, "paste", self.btn_w_paste, btn_y, btn_h, mx, my);
+        self.drawToolbarButton(tb.reset_x, BTN_RESET, "reset", self.btn_w_reset, btn_y, btn_h, mx, my);
     }
 
     pub fn drawFrame(self: *App) void {
+        const FONT_SIZE_TIMEOUT: i32 = 18;
+
         rl.beginDrawing();
         defer rl.endDrawing();
 
@@ -1052,51 +1124,7 @@ pub const App = struct {
         const mx = rl.getMouseX();
         const my = rl.getMouseY();
 
-        rl.drawRectangle(0, 0, self.render_w, LINE1_H, COL_BAR);
-        rl.drawRectangle(0, LINE1_H, self.render_w, 1, COL_SEP);
-        rl.drawRectangle(0, LINE1_H + 1, self.render_w, LINE2_H, COL_BAR);
-        rl.drawRectangle(0, TOTAL_TOP - 1, self.render_w, 1, COL_SEP);
-
-        rl.drawTextEx(self.ui_font, "drag to zoom    \xe2\x86\x90 left arrow zooms out    \xe2\x86\x92 right arrow zooms back in    press R to reset", .{ .x = @floatFromInt(HINT_PAD_X), .y = @floatFromInt(LINE1_H + HINT_PAD_Y) }, FONT_SIZE_LG, 1, COL_HINT);
-
-        const tb_y: i32 = (LINE1_H - TB_H) / 2;
-        const btn_y: i32 = tb_y;
-        const btn_h: i32 = TB_H;
-        const tb = ToolbarLayout.compute(self.render_w);
-
-        rl.drawRectangle(tb.tb_start_x, tb_y, tb.tb_w, TB_H, COL_TB_BG);
-        rl.drawRectangleLines(tb.tb_start_x, tb_y, tb.tb_w, TB_H,
-            if (self.tb_active) COL_TB_BORDER_ACTIVE else COL_TB_BORDER);
-
-        var display_buf: [CLIPBOARD_BUF]u8 = undefined;
-        const display_text = if (self.tb_active)
-            self.tb_buf.slice()
-        else
-            std.fmt.bufPrintZ(&display_buf, VIEW_FMT, .{
-                self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters,
-            }) catch unreachable;
-        rl.drawTextEx(self.ui_font, display_text, .{ .x = @floatFromInt(tb.tb_start_x + TEXT_PAD_X), .y = @floatFromInt(tb_y + TEXT_PAD_Y) }, FONT_SIZE_LG, 1.0, COL_TEXT);
-
-        if (self.tb_active) {
-            const blink = @as(u32, @intFromFloat(rl.getTime() * 2.0)) & 1;
-            if (blink == 0) {
-                var cursor_buf: [TB_CAP + 1]u8 = undefined;
-                @memcpy(cursor_buf[0..self.tb_buf.cursor], self.tb_buf.buf[0..self.tb_buf.cursor]);
-                cursor_buf[self.tb_buf.cursor] = 0;
-                const cursor_text = cursor_buf[0..self.tb_buf.cursor :0];
-                const m2 = rl.measureTextEx(self.ui_font, cursor_text, FONT_SIZE_LG, 1.0);
-                const cx = tb.tb_start_x + TEXT_PAD_X + @as(i32, @intFromFloat(m2.x));
-                rl.drawRectangle(cx, tb_y + TEXT_PAD_Y, CURSOR_W, CURSOR_H, COL_TB_BORDER_ACTIVE);
-            }
-        }
-
-        self.drawToolbarArrow(tb.arrow_l_x, CP_ARROW_LEFT, btn_y, btn_h, mx, my);
-        self.drawToolbarArrow(tb.arrow_r_x, CP_ARROW_RIGHT, btn_y, btn_h, mx, my);
-        self.drawToolbarButton(tb.inc_x, BTN_ITER, "inc", self.btn_w_inc, btn_y, btn_h, mx, my);
-        self.drawToolbarButton(tb.dec_x, BTN_ITER, "dec", self.btn_w_dec, btn_y, btn_h, mx, my);
-        self.drawToolbarButton(tb.copy_x, BTN_LG, "copy", self.btn_w_copy, btn_y, btn_h, mx, my);
-        self.drawToolbarButton(tb.paste_x, BTN_LG, "paste", self.btn_w_paste, btn_y, btn_h, mx, my);
-        self.drawToolbarButton(tb.reset_x, BTN_RESET, "reset", self.btn_w_reset, btn_y, btn_h, mx, my);
+        self.drawToolbar(mx, my);
 
         if (self.drag.active) {
             const x0: f32 = @floatCast(@min(self.drag.start_x, self.drag.current_x));
@@ -1107,69 +1135,8 @@ pub const App = struct {
             }
         }
 
-        self.drawHighlight();
-
-        // Tooltip checkbox — right-aligned on second line
-        {
-            const chk_label = if (self.tooltip_enabled) TOOLTIP_LABEL else TOOLTIP_LABEL_OFF;
-            const chk_w = self.tooltip_label_w;
-            const chk_x = @as(f32, @floatFromInt(self.render_w)) - @as(f32, @floatFromInt(TOP_PAD)) - chk_w;
-            const chk_y = @as(f32, @floatFromInt(LINE1_H)) + @as(f32, @floatFromInt(HINT_PAD_Y));
-            const hover = @as(f32, @floatFromInt(mx)) >= chk_x and @as(f32, @floatFromInt(mx)) < chk_x + chk_w and
-                my >= LINE1_H + HINT_PAD_Y and my < LINE1_H + HINT_PAD_Y + @as(i32, @intFromFloat(FONT_SIZE_LG));
-            rl.drawTextEx(self.ui_font, chk_label, .{ .x = chk_x, .y = chk_y }, FONT_SIZE_LG, 1,
-                if (hover) COL_TEXT else COL_HINT);
-        }
-
-        // Coordinate tooltip: 2s hover delay, pixel-center coords
-        if (self.tooltip_enabled) {
-            const viewport_y = TOTAL_TOP;
-            if (my >= viewport_y and my < self.render_h) {
-                const dpi_f: f64 = @floatFromInt(self.dpi_scale);
-                const phys_px = @as(f64, @floatFromInt(mx)) * dpi_f;
-                const phys_py = (@as(f64, @floatFromInt(my)) - @as(f64, @floatFromInt(viewport_y))) * dpi_f;
-                const w_f: f64 = @floatFromInt(self.image.width);
-                const h_f: f64 = @floatFromInt(self.image.height);
-
-                if (phys_px >= 0 and phys_px < w_f and phys_py >= 0 and phys_py < h_f) {
-                    const moved = @abs(mx - self.tooltip_last_mx) > TOOLTIP_MOVE_THRESHOLD_PX or
-                        @abs(my - self.tooltip_last_my) > TOOLTIP_MOVE_THRESHOLD_PX;
-                    if (moved) {
-                        self.tooltip_mouse_still_since = rl.getTime();
-                        self.tooltip_last_mx = mx;
-                        self.tooltip_last_my = my;
-                    }
-
-                    if (rl.getTime() - self.tooltip_mouse_still_since >= TOOLTIP_DELAY_S) {
-                        const px: f64 = @floor(phys_px);
-                        const py: f64 = @floor(phys_py);
-                        const coord = self.pixelCenterToComplex(px, py);
-
-                        var tooltip_buf: [128]u8 = undefined;
-                        const tooltip_text = std.fmt.bufPrintZ(&tooltip_buf, "x={d:.8}  y={d:.8}", .{ coord.x, coord.y }) catch unreachable;
-
-                        const tt_size = rl.measureTextEx(self.ui_font, tooltip_text, FONT_SIZE_LG, 1);
-                        const tt_w = tt_size.x + @as(f32, @floatFromInt(TOOLTIP_PAD_X * 2));
-                        const tt_h = tt_size.y + @as(f32, @floatFromInt(TOOLTIP_PAD_Y * 2));
-
-                        const c_x: f32 = @floatFromInt(mx + TOOLTIP_OFFSET_X);
-                        const c_y: f32 = @floatFromInt(my + TOOLTIP_OFFSET_Y);
-                        const max_x = @as(f32, @floatFromInt(self.render_w)) - tt_w - @as(f32, @floatFromInt(TOP_PAD));
-                        const max_y = @as(f32, @floatFromInt(self.render_h)) - tt_h - @as(f32, @floatFromInt(TOP_PAD));
-                        const tt_x = @min(max_x, @max(@as(f32, @floatFromInt(TOP_PAD)), c_x));
-                        const tt_y = @min(max_y, @max(@as(f32, @floatFromInt(viewport_y)), c_y));
-
-                        const bg = rl.Rectangle{ .x = tt_x, .y = tt_y, .width = tt_w, .height = tt_h };
-                        rl.drawRectangleRounded(bg, 0.3, 4, .{ .r = 30, .g = 30, .b = 40, .a = 200 });
-                        rl.drawTextEx(self.ui_font, tooltip_text, .{ .x = tt_x + @as(f32, @floatFromInt(TOOLTIP_PAD_X)), .y = tt_y + @as(f32, @floatFromInt(TOOLTIP_PAD_Y)) }, FONT_SIZE_LG, 1, .white);
-                    }
-                }
-            } else {
-                self.tooltip_mouse_still_since = rl.getTime();
-                self.tooltip_last_mx = mx;
-                self.tooltip_last_my = my;
-            }
-        }
+        self.drawTooltipCheckbox(mx, my);
+        self.drawCoordinateTooltip(mx, my);
 
         if (self.render_timed_out) {
             const msg = "[Space]: continue";

@@ -265,6 +265,73 @@ test "deep zoom render produces valid output" {
     try testing.expect(non_black > 0);
 }
 
+test "deep zoom Seahorse Valley perturbation render matches ground truth" {
+    m.buildPalette();
+
+    const w: i32 = 16;
+    const h: i32 = 16;
+    const cx: f64 = -1.92715562;
+    const cy: f64 = 0.00134343;
+    const range: f64 = 1.02862035e-21;
+    const max_iters: u32 = 1 << 16;
+
+    // Determine reference escape status to select appropriate render method.
+    const orbit = try m.computeReference(cx, cy, max_iters, std.testing.allocator);
+    defer std.testing.allocator.free(orbit);
+    const last = orbit[orbit.len - 1];
+    const ref_norm_sq = last.zx * last.zx + last.zy * last.zy;
+    const ref_escaped = !std.math.isFinite(ref_norm_sq) or ref_norm_sq > m.ESCAPE_RADIUS_SQ;
+
+    const view = m.ViewState{
+        .center_x = cx,
+        .center_y = cy,
+        .range = range,
+        .max_iters = max_iters,
+        .render_method = if (ref_escaped) .auto else .perturbation,
+    };
+
+    const img = rl.genImageColor(w, h, .black);
+    defer rl.unloadImage(img);
+
+    const pixels = @as([*]u8, @ptrCast(img.data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+    const timed_out = try renderer.renderMandelbrot(pixels, @intCast(w), @intCast(h), view, true, 0, rl.getTime, null);
+    try testing.expect(!timed_out);
+
+    // Pixel-centre mapping for ground truth comparison (must match renderer.zig).
+    const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
+    const range_x = view.range;
+    const range_y = view.range / aspect;
+    const left = view.center_x + view.offset_x - range_x / 2.0;
+    const top = view.center_y + view.offset_y - range_y / 2.0;
+
+    var mismatches: usize = 0;
+    var exterior_gt: usize = 0;
+
+    for (0..@as(usize, @intCast(h))) |py| {
+        const pcy = top + (@as(f64, @floatFromInt(py)) + 0.5) * range_y / @as(f64, @floatFromInt(h));
+        for (0..@as(usize, @intCast(w))) |px| {
+            const pcx = left + (@as(f64, @floatFromInt(px)) + 0.5) * range_x / @as(f64, @floatFromInt(w));
+
+            const gt = m.groundTruthPixel(pcx, pcy, max_iters);
+            const idx = (py * @as(usize, @intCast(w)) + px) * 4;
+            const render_interior = isPixelBlack(pixels, idx);
+
+            if (gt.escaped) {
+                exterior_gt += 1;
+                if (render_interior) mismatches += 1;
+            } else {
+                if (!render_interior) mismatches += 1;
+            }
+        }
+    }
+
+    // Every pixel in a 16×16 image should match ground truth.
+    try testing.expectEqual(@as(usize, 0), mismatches);
+
+    // At least one exterior pixel must exist (the image can't be all interior).
+    try testing.expect(exterior_gt > 0);
+}
+
 var timeout_clock_calls: u32 = 0;
 
 fn timeoutTestClock() f64 {

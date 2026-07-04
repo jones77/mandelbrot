@@ -86,7 +86,8 @@ fn renderStrip(ctx: *RenderStrip) void {
                 break :blk m.renderPerturbationPixel(dcx, dcy, orbit, max_iters, cfg.glitch_ratio);
             } else if (cfg.ref_orbit != null or render_fallback_f64)
                 m.rebaseFallback(cx_f64, cy_f64, cx_f64, cy_f64, 0, max_iters)
-            else m.standardPixel(cx, cy, max_iters, cfg.interior_eps_sq, cfg.periodicity_eps_sq);
+            else
+                m.standardPixel(cx, cy, max_iters, cfg.interior_eps_sq, cfg.periodicity_eps_sq);
 
             if (mu >= max_f) continue;
             const color = m.smoothColor(@as(f64, mu), max_iters);
@@ -120,15 +121,15 @@ fn logTimeout(view: m.ViewState, timeout_s: f64) void {
 
 pub fn renderMandelbrot(
     pixels: []u8,
-    w: usize,
-    h: usize,
+    width: usize,
+    height: usize,
     view: m.ViewState,
     clear: bool,
     timeout_s: f64,
     get_time_fn: *const fn () f64,
     rows_completed: ?[]bool,
 ) !bool {
-    const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
+    const aspect = @as(f64, @floatFromInt(width)) / @as(f64, @floatFromInt(height));
     const range_x = view.range;
     const range_y = view.range / aspect;
     const left = view.center_x + view.offset_x - range_x / 2.0;
@@ -163,7 +164,7 @@ pub fn renderMandelbrot(
         break :blk ref_escaped or view.render_method == .perturbation;
     } else false;
 
-    var num_threads: usize = h / MIN_ROWS_PER_THREAD;
+    var num_threads: usize = height / MIN_ROWS_PER_THREAD;
     if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
     if (num_threads < 1) num_threads = 1;
 
@@ -171,8 +172,8 @@ pub fn renderMandelbrot(
 
     const config = RenderConfig{
         .pixels = pixels,
-        .w = w,
-        .h = h,
+        .w = width,
+        .h = height,
         .left = left,
         .top = top,
         .range_x = range_x,
@@ -198,8 +199,8 @@ pub fn renderMandelbrot(
     for (0..num_threads) |i| {
         strips[i] = RenderStrip{
             .cfg = &config,
-            .start_row = (h * i) / num_threads,
-            .end_row = (h * (i + 1)) / num_threads,
+            .start_row = (height * i) / num_threads,
+            .end_row = (height * (i + 1)) / num_threads,
             .timed_out = false,
         };
         threads[i] = try std.Thread.spawn(.{}, renderStrip, .{&strips[i]});
