@@ -122,6 +122,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .ReleaseSafe,
     });
+    const release_opts = b.addOptions();
+    release_opts.addOption(bool, "use_gpa", false);
+    release_mod.addImport("buildopts", release_opts.createModule());
     const raylib_dep_rel = b.dependency("raylib_zig", .{
         .target = target,
         .optimize = .ReleaseSafe,
