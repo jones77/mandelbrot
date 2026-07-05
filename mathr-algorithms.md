@@ -130,3 +130,9 @@ polynomial.  In practice, bisection on `t = k·π/3` segments works.
 Linear distance estimate via Taylor expansion gives a closed form `d(x, y)`,
 but is inaccurate near the cusp.  Quadratic expansion produces a high-degree
 polynomial.  Exact distance to the circle is trivial.
+
+---
+
+*Credits: All algorithms above are from Claude Heiland-Allen's blog post at
+https://mathr.co.uk/blog/2022-11-19_cardioid_and_bulb_checking.html
+Thanks to Heiland-Allen for the clear exposition and mathematical derivations.*
