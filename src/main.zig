@@ -2,7 +2,6 @@ const std = @import("std");
 const rl = @import("raylib");
 const app = @import("app.zig");
 const m = @import("mandelbrot.zig");
-const _ = @import("integration_tests.zig");
 
 const DEFAULT_WIDTH: i32 = 900;
 const DEFAULT_HEIGHT: i32 = 800;
@@ -23,6 +22,7 @@ pub fn main(init: std.process.Init) !void {
     // Initial render.
     _ = try a.renderFresh(true);
     try a.saveSnapshot();
+
 
     // Main loop.
     while (!rl.windowShouldClose()) {

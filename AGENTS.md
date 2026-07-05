@@ -3,9 +3,14 @@
 ## Project context
 
 Interactive Mandelbrot viewer in Zig 0.16 + raylib (via raylib-zig v5.6-dev).
-Six source files: `main.zig` (entry), `app.zig` (UI/history/clipboard),
-`renderer.zig` (multi-threaded rendering), `mandelbrot.zig` (pure math + tests),
-`pixel.zig` (pixel format constants), `log.zig` (timestamping & structured logging).
+**Must be cross-platform** — no macOS-only, Win32-only, or Linux-only code.
+All platform-specific behaviour must go through raylib's abstractions.
+Ten source files: `main.zig` (entry), `app.zig` (coordinator — history, animation,
+rendering), `input.zig` (keyboard/mouse/textbox input), `ui.zig` (drawing, toolbar,
+tooltips), `renderer.zig` (multi-threaded rendering), `mandelbrot.zig` (pure math +
+tests), `pixel.zig` (pixel format constants), `log.zig` (timestamping & structured
+logging), `test_runner.zig` (test harness — imports all files with test blocks),
+`integration_tests.zig` (image-based tests).
 
 ## Zig conventions
 
@@ -13,6 +18,9 @@ Follow `lib/std/*.zig` conventions. Key exemplars to read for patterns:
 - `std/fmt.zig` — overall file structure (imports → constants → types → functions → test block)
 - `std/array_list.zig` — type with methods, generics
 - `std/testing.zig` — test helpers
+
+Language reference: https://ziglang.org/documentation/0.16.0/
+Standard library: https://ziglang.org/documentation/0.16.0/std/
 
 ## References
 
@@ -37,8 +45,18 @@ Names like "utils" are too vague to convey purpose and encourage bloat.
 zig fetch --save git+https://github.com/raylib-zig/raylib-zig#v5.6-dev  # once
 zig build run      # run app
 zig build test     # full suite — all test blocks in main.zig's module tree
-zig build unit     # 58 pure-math tests (mandelbrot.zig), no raylib
+zig build unit     # pure-math tests (mandelbrot.zig), no raylib
+zig build build-san # build with DebugAllocator (use-after-free, double-free)
+zig build run-san  # run with DebugAllocator
+zig build test-san # test suite with DebugAllocator
 ```
+
+## Reading files efficiently
+
+Re-reading a file after every `edit` or `write` call wastes context.
+**Do not re-read a file to confirm a change.**  The edit tool signals
+success or failure.  If you need to verify, read only the affected
+lines using `offset` and `limit`, not the entire file.
 
 ## Critical architecture: pixel-center convention
 
@@ -85,6 +103,51 @@ Key tests for regression detection:
 
 ## Debugging notes
 
+### Guarding against uninitialised struct fields
+
+Zig's `= undefined` in a struct literal field (e.g. `.history = undefined`)
+leaves bytes truly uninitialised — no zeroing, no `0xAA` fill, just whatever
+was in memory.  (Contrast with `var x: T = undefined` in Debug mode, which
+DOES get `0xAA` fill — struct literal fields are a different code path.)
+
+When that field contains slices or allocator-managed pointers, garbage
+pointer/length values can corrupt the allocator if accidentally read.
+
+**Bad pattern — uninitialised array of entries containing `[]u8`:**
+```zig
+var app = App{
+    .history = undefined,    // 64 HistoryEntry structs, garbage []u8
+    .history_len = 0,        // bounds check trusts history_len,
+    .history_ptr = 0,        // which is itself a usize — stale bytes here defeat it
+};
+```
+
+**Good pattern — `@memset` to zero after the struct literal:**
+```zig
+var app = App{
+    .history = undefined,
+    .history_len = 0,
+    .history_ptr = 0,
+    // ... other fields ...
+};
+
+// Every .pixels slice gets .ptr=null, .len=0.  pushHistory overwrites
+// entries as they are used.  Any accidental read hits a zero-length
+// slice or a w/h dimension mismatch, both caught by existing guards.
+@memset(std.mem.asBytes(&app.history), 0);
+```
+
+This pattern applies whenever a struct literal contains an array or struct
+field whose bytes could be read before explicit initialisation.  Simple
+local buffers (`var buf: [128]u8 = undefined`) are fine — they are written
+by `bufPrint` etc. before any read.  The risk is **struct/array fields
+containing slices, pointers, or allocator handles** that downstream code
+unwittingly dereferences.
+
+References: [`@memset`](https://ziglang.org/documentation/0.16.0/#memset),
+[`std.mem.asBytes`](https://ziglang.org/documentation/0.16.0/std/#std.mem.asBytes),
+[`undefined`](https://ziglang.org/documentation/0.16.0/#undefined).
+
 ### Ground-truth tests prove self-consistency, not correctness
 The ground-truth tests (`groundTruthInterior` + renderer comparison) use the
 SAME pixel-to-complex formula as the renderer. If the formula is wrong, both
@@ -97,6 +160,60 @@ Mandelbrot explorers didn't show. The working commit f678ecc was identified
 and compared against HEAD. Bisecting narrowed it to the divisor change
 (`w-1` → `w`) in 440c813. Neither divisor was correct — the fix was pixel
 centers: `(px + 0.5) * range_x / w` (commit 0ef123a).
+
+### Uninitialised struct field bug (2026-07-04)
+The user reported that after the first drag-to-zoom, pressing the left arrow
+key to navigate back did nothing on the first press, but worked on the second.
+Environment-dependent: worked on a clean launch, failed after other macOS apps
+had used the same memory.
+
+**Root cause:** The `[64]HistoryEntry` array was `.history = undefined` in the
+`App` struct literal.  While all reads were logically bounded by `history_len`,
+the bounds check itself reads `history_len` — a `usize` field.  When the stack
+bytes at that struct offset happened to be zero (clean launch), `history_len`
+was 0 and everything worked.  When those bytes contained stale non-zero values
+(from prior allocator use by other processes), `history_len` appeared to be a
+non-zero value, making downstream code (`truncateFuture`, `startZoomAnimation`)
+believe uninitialised entries were valid.
+
+**Fix:** `@memset(std.mem.asBytes(&app.history), 0)` after the struct literal
+so every entry has `w=0, h=0, pixels.len=0`.
+
+**Note:** `zig build test-san` catches the downstream heap corruption
+(use-after-free, double-free) that eventually results from stale history
+data, but does NOT catch the root cause — reads of uninitialised struct
+fields.  That would require MemorySanitizer, which Zig doesn't support.
+
+### Startup double-poll bug (2026-07-04)
+
+A separate issue from the history initialisation: the `rl.pollInputEvents()` +
+queue-drain logic at startup (double-poll) was supposed to clear stale OS
+events, but it actually CAUSED the first key press to be swallowed.  A stale
+event for `.left` left `currentKeyState[left]=1`, and the second poll copied
+that 1 into `previousKeyState`, so the user's real press saw no 0→1 transition.
+
+**Fix:** removed all startup polling entirely.  The main loop's first
+`PollInputEvents` processes stale and real events together.  A stale event may
+cause a phantom transition on the very first frame, but window-creation events
+are rarely arrow keys, so the trade-off favours never losing a real press.
+
+### Idle-timer key-swallow bug (2026-07-04, resolved 2026-07-05)
+
+**Symptom:** after the zoom-in animation ends, the first left-arrow press
+sometimes produced no `isKeyDown` and no `isKeyPressed` — no trace at all.
+A second press immediately after worked.  It was intermittent and
+environment-dependent.
+
+**Root cause:** Same as the uninitialised-history bug — the `[64]HistoryEntry`
+array was not zeroed, so stale stack bytes could corrupt `history_ptr`,
+`history_len`, or animation state that downstream code (`navigateHistoryBack`,
+`startZoomAnimation`) read.  When the stale bytes happened to be zero
+(clean launch) the bug didn't appear; after other processes used the memory
+it appeared intermittently.
+
+**Fix:** `@memset(std.mem.asBytes(&app.history), 0)` resolved both variants.
+The idle-timer scenario and the drag-to-zoom scenario were different
+manifestations of the same root cause.
 
 ## Release process
 
@@ -136,7 +253,6 @@ centers: `(px + 0.5) * range_x / w` (commit 0ef123a).
 
 - Bump the version in `build.zig.zon` to the next dev version
   (e.g. `0.0.2-dev`) and commit.
-```
 
 ## Agent debugging
 
@@ -160,6 +276,7 @@ grep '\[anim\]' debug.log           # all animation events
 grep '\[drag\]' debug.log           # all drag-zoom events
 grep -E '\[(anim|drag|history)\]' debug.log   # user interactions
 grep 'ignored' debug.log            # missed navigation attempts
+grep 'keytrace' debug.log           # raw key state (pressed/down every frame a key is active)
 ```
 
 ### Event scopes
@@ -169,11 +286,13 @@ grep 'ignored' debug.log            # missed navigation attempts
 | `app` | lifecycle, resize | dimensions, dpi |
 | `anim` | animation start/end | direction, dur, from/to range |
 | `drag` | drag-to-zoom | from/to range, iters |
-| `history` | arrow navigation | entry index, target range, anim state; or `ignored` when at boundary |
+| `history` | arrow navigation | entry index, target range, anim state; `ignored` when at boundary; `skipped` when `tb_active` blocks input |
 | `iters` | iteration adjustment | inc/dec, old → new |
 | `view` | reset to default | — |
 | `ui` | textbox, clipboard | range, operation |
+| `keytrace` | raw key state | left/right isKeyPressed, isKeyDown, history ptr/len, anim state |
 | `render` | timeout, continue | — |
+| `alloc` | allocator initialization | DebugAllocator or page_allocator |
 
 ### Interpreting logs
 
@@ -181,5 +300,10 @@ grep 'ignored' debug.log            # missed navigation attempts
 - `>200ms` gap → `renderFresh` was called (dimension mismatch)
 - Large gap between `[anim] start` and `[anim] end` → user was idle
 - `[anim] end` missing → animation was cancelled (resize, new input)
+- `[history] left/right skipped` → the textbox was active (`tb_active=true`), so the
+  arrow key was consumed by cursor movement instead of history navigation.
+  Indicates the user clicked into the textbox without dismissing it.
+- `[history] keytrace` → raw per-frame key state (left/right `isKeyPressed`, `isKeyDown`,
+  history ptr/len).  Only logged on frames where at least one is `true`.
 - Timestamps are UTC, monotonic within a session
 - No output = idle frames (nothing user-initiated occurred during those gaps)

@@ -527,4 +527,3 @@ test "every pixel matches ground truth at startup resolution and iters" {
     try testing.expect(exterior > 0);
 }
 
-
