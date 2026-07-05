@@ -215,6 +215,184 @@ it appeared intermittently.
 The idle-timer scenario and the drag-to-zoom scenario were different
 manifestations of the same root cause.
 
+## Numerical precision lessons
+
+This codebase has uncovered several patterns of floating-point failure in
+Mandelbrot rendering.  These notes apply to any deep-zoom renderer.
+
+### Why we use |z|², not |z|
+
+The Mandelbrot iterate checks `|z|² > 4` (the escape radius), so we never
+need `|z| = sqrt(re² + im²)` directly.  This sidesteps two problems:
+
+1. **Overflow in the squaring step:** computing `re² + im²` directly can
+   overflow to infinity when |re| or |im| exceeds `sqrt(DBL_MAX)` (~1e154
+   for f64).  A numerically stable `|z|` function would factor out the
+   larger component:
+   ```
+   absr = |re|,  absi = |im|
+   if absr > absi:  return absr * sqrt(1 + (absi/absr)²)
+   else:            return absi * sqrt(1 + (absr/absi)²)
+   ```
+   But we don't need this because we work with |z|² throughout.  The
+   escape check is `|z|² > 4`, and the smooth iteration formula uses
+   `½·log(|z|²)` (no sqrt).
+
+2. **Overflow is already handled:** in `renderPerturbationPixel`, when
+   `Z_norm_sq = Zx² + Zy²` overflows to infinity, the `!isFinite` check
+   triggers a rebase fallback.  For `rebaseFallback`, the |z|² > 4 check
+   triggers before |z| can grow large enough to overflow.
+
+Rule of thumb: **always prefer |z|² over |z| when the escape radius is
+fixed** — you avoid the sqrt, the overflow-sensitive division in the
+stable-abs formula, and the rsqrt instruction's precision loss.
+
+### The per-component fold_eps trap in `computeDragDelta`
+
+`computeDragDelta` decides whether a drag delta is large enough to be
+added to `center_x`/`center_y` directly, or whether it must be stored
+in `offset_x`/`offset_y` to avoid precision loss.  The threshold is
+`fold_eps = |component| · eps(f64)` — if the delta is smaller than this,
+adding it to the component rounds away.
+
+**Wrong approach:** compute one `fold_eps` from `max(|cx|,|cy|)` and use
+it for both axes:
+
+```zig
+// BAD — propagates the x-magnitude to the y-threshold
+const center_mag = @max(@abs(view.center_x), @abs(view.center_y));
+const fold_eps = center_mag * std.math.floatEps(f64);
+```
+
+This causes phantom y-shift when zooming on the real axis: |cx| ≈ 1.485
+gives `fold_eps ≈ 3.3e-16` for **both** axes.  But at `center_y = 0`,
+there is **zero precision loss** in adding any small delta to zero
+(`0 + small = small` — f64 near 0 has subnormals).  Small y-deltas
+accumulate in `offset_y` instead of folding into `center_y`.  Over many
+zooms, `offset_y` grows to ~fold_eps while `center_y` stays at 0,
+pushing the viewport off the real axis into exterior territory →
+colored horizontal bands where the image should be solid black.
+
+**Fix:** compute fold thresholds per component:
+
+```zig
+const fold_eps_x = @abs(view.center_x) * std.math.floatEps(f64);
+const fold_eps_y = @abs(view.center_y) * std.math.floatEps(f64);
+```
+
+When `center_y = 0`, `fold_eps_y = 0` and every delta folds immediately.
+This is correct — zero has no precision loss with any addend.
+
+**General principle:**
+- Each floating-point addition's precision is determined by the **larger
+  operand's magnitude**, not the other operand's.
+- When folding a delta into a center coordinate, the fold threshold must
+  be derived from that **component's own magnitude**, not from a
+  cross-component aggregate.
+- Near zero, f64 has denormal representation (~5e-324 min positive),
+  so the fold threshold is essentially zero.  Aggregating from a
+  different (large) component loses this property.
+
+### A coordinate is only as precise as its display format
+
+The textbox format is `x={d:.8} y={d:.8} range={e:.8} iters={d}`.  At
+deep zoom (range ~5e-17), `center_y = 2e-16` displays as `y=0.00000000`
+because 8 decimal places round 2e-16 to zero.  When the user pastes
+these coordinates back, `parseViewState` creates a ViewState with
+`center_y = 0`, silently dropping the sub-ULP y-shift that was living
+in `offset_y` (which is not displayed or parsed at all).
+
+**Lesson:** if a coordinate component can carry meaningful sub-ULP
+precision through the offset mechanism, the display format must
+accommodate it.  Either display offsets explicitly, or display the
+sum `center + offset` with enough precision.  The current format
+`{d:.8}` only needs 8 decimal places at normal zoom (range ~3), but
+at range ~5e-17 the meaningful y-values are ~1e-17, requiring roughly
+`{d:.17}` to avoid round-trip loss.
+
+### The roughly-1e-28 floor
+
+**Every** finite-decimal constant like `0.1`, `0.01`, `1e-17` is a
+**repeating fraction in binary** — IEEE 754 binary floating point can
+only store it approximately.  This means:
+
+- `1e-17` as an `f64` literal is not exactly `10⁻¹⁷` — it's the closest
+  representable binary value, off by ~`1.1e-33` (half a ULP at that scale).
+- Adding it 100 times and multiplying by 100 compound that error
+  **differently**:
+  ```zig
+  // one rounding step
+  100.0 * delta_y  // ~1e-30 error
+
+  // 100 rounding steps, each at increasing scale
+  delta_y + delta_y + ...  // slightly different error
+  ```
+
+**Rule of thumb:** tests that compare results from different operation
+sequences on the same decimal constant need a tolerance — the two paths
+round differently.  To get exact equality, use powers-of-two constants
+(e.g. `0x1.0p-57` instead of `1e-17`), which are exact in binary.
+
+**When it matters:** in production rendering, this scale of error
+(~1e-30) is invisible — it's far below the precision needed to classify
+a pixel as interior/exterior.  It only surfaces in assertions that
+compare two fp expressions for the "same" value derived via different
+arithmetic.
+
+## Zoom depth limits
+
+The question "how deep can we go?" comes up whenever a user sees artifacts
+at extreme zoom.  The answer depends on which part of the set you're in.
+
+### The fundamental bottleneck
+
+f64 has a ULP (unit in the last place) of about `2e-16 × |value|`.
+Adding a small offset to a large coordinate rounds away if the offset is
+smaller than ~1 ULP.  The offset mechanism (`offset_x`/`offset_y`) works
+around this for accumulated deltas, but the per-pixel computation
+`(px+0.5) * range/w` must resolve each pixel's position through the
+`left`/`top` formulas.  The practical floor:
+
+| Component | Limit | Why |
+|-----------|-------|-----|
+| **x-pixels on antenna** | `range ≈ 1e-28` | `range/w` becomes invisible at the scale of the accumulated x-offset (~3e-16) |
+| **y-pixels on real axis** | essentially unlimited | center_y=0 means zero precision loss (subnormals); x-axis is always the bottleneck |
+| **y-pixels off real axis** | `range ≈ 1e-28` at |cy| ≈ 1e-14 | once center_y grows, same ULP constraints as x-axis |
+
+### What happens at each regime
+
+| Range | Mechanism | Can distinguish pixels? |
+|-------|-----------|----------------------|
+| `> 3e-16` | f64 fallback folds deltas into center | Yes (standard zoom) |
+| `3e-16` to `1e-28` | Perturbation + offset mechanism | Yes, via small-magnitude `dcx`/`dcy` |
+| `< 1e-28` | Perturbation still works but `range/w` step rounds away | No — adjacent x-pixels get same coordinate |
+
+### The all-interior case
+
+On the real axis (y=0 within [-2, 0.25]), the entire viewport is inside
+the Mandelbrot set.  Perturbation cannot find an escaping reference, so
+the f64 fallback (`rebaseFallback`) is used.  Below `range ≈ 3e-16` this
+produces the same f64 value for every x-pixel — but that's harmless
+because every pixel IS interior.  The render is uniformly black, which is
+correct.
+
+**The trap:** the old `computeDragDelta` (single fold_eps from max component)
+could accumulate phantom y-shifts in `offset_y`, pushing the viewport off
+the real axis into exterior territory.  With per-component fold thresholds,
+this is fixed — center_y stays precisely at 0 when the user stays on the
+real axis.
+
+### When to suspect a precision limit
+
+1. **Image is uniformly colored bands** (no interior black) at extreme zoom
+   — check that offsets aren't pushing the viewport into exterior territory.
+   Paste the coordinates (resets offsets) to confirm.
+2. **Two adjacent double-clicks on the same point don't produce the same
+   image** — offsets accumulated between clicks may have shifted the viewport.
+3. **`[drag] zoom` log entries show center_y drifting away from 0** on the
+   real axis — indicates the old fold_eps bug.  Fix already applied in
+   commit with per-component fold thresholds.
+
 ## Release process
 
 ### Prerequisites

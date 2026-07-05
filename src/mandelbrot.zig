@@ -93,9 +93,16 @@ pub const DragDeltaResult = struct {
 /// At normal zoom, the delta is large enough to fold into center_x/center_y.
 /// At deep zoom, the delta is kept in offset_x/offset_y (which the renderer
 /// adds to per-pixel dcx/dcy) to avoid f64 precision loss.
+///
+/// Each axis gets its own fold threshold based on `|component| * eps(f64)`.
+/// Using `max(|cx|,|cy|)` for both axes would be incorrect: when |cx| >> |cy|
+/// (e.g. deep zoom on the real axis), the y-threshold would be too large,
+/// causing unnecessary y-offset accumulation.  When |cy| = 0, there is zero
+/// precision loss in adding a small delta to center_y (0 + small = small),
+/// so deltas must always fold.
 pub fn computeDragDelta(view: ViewState, delta_x: f64, delta_y: f64) DragDeltaResult {
-    const center_mag = @max(@abs(view.center_x), @abs(view.center_y));
-    const fold_eps = center_mag * std.math.floatEps(f64);
+    const fold_eps_x = @abs(view.center_x) * std.math.floatEps(f64);
+    const fold_eps_y = @abs(view.center_y) * std.math.floatEps(f64);
 
     const new_ox = view.offset_x + delta_x;
     const new_oy = view.offset_y + delta_y;
@@ -105,12 +112,12 @@ pub fn computeDragDelta(view: ViewState, delta_x: f64, delta_y: f64) DragDeltaRe
     var final_ox: f64 = 0;
     var final_oy: f64 = 0;
 
-    if (@abs(new_ox) >= fold_eps) {
+    if (@abs(new_ox) >= fold_eps_x) {
         final_cx += new_ox;
     } else {
         final_ox = new_ox;
     }
-    if (@abs(new_oy) >= fold_eps) {
+    if (@abs(new_oy) >= fold_eps_y) {
         final_cy += new_oy;
     } else {
         final_oy = new_oy;
@@ -1860,6 +1867,36 @@ test "computeDragDelta folds at normal zoom, keeps offset at deep zoom" {
         try testing.expectEqual(v.center_y, r.center_y);
         try testing.expectApproxEqAbs(delta_y, r.offset_y, 1e-36);
     }
+    // Regression: y-delta at center_y=0 must fold into center_y, not
+    // accumulate in offset_y.  When center_y=0, there is zero precision
+    // loss in adding a small delta (0 + small = small), so fold_eps_y=0.
+    // The old code used max(|cx|,|cy|) which kept sub-fold_eps deltas in
+    // offset_y, allowing phantom y-shift accumulation during deep-zoom
+    // double-click sequences.  Refs the "green horizontal bands" bug.
+    {
+        const v = ViewState{ .center_x = -1.48536955, .center_y = 0.0, .range = 5.24680129e-17, .max_iters = 8192 };
+        const delta_y: f64 = 1.0e-17; // ~range/5, precisely representable at y=0
+        const r = computeDragDelta(v, 0.0, delta_y);
+        // Must fold into center_y, not accumulate in offset_y
+        try testing.expectApproxEqAbs(delta_y, r.center_y, 1e-36);
+        try testing.expectEqual(@as(f64, 0.0), r.offset_y);
+        // Repeated calls must not accumulate offsets — phantom y-shift bug
+        {
+            var accum = v;
+            var i: usize = 0;
+            while (i < 100) : (i += 1) {
+                const ri = computeDragDelta(accum, 0.0, delta_y);
+                accum = ViewState{ .center_x = ri.center_x, .center_y = ri.center_y, .offset_x = ri.offset_x, .offset_y = ri.offset_y, .range = accum.range, .max_iters = accum.max_iters };
+                try testing.expectEqual(@as(f64, 0.0), accum.offset_y);
+            }
+            // After 100 calls, y shift accumulated in center_y matches
+            // 100 × delta_y (within fp tolerance).  `100.0 * delta_y`
+            // is computed by single multiplication; accum.center_y comes
+            // from 100 sequential `center_y += delta_y` additions, each
+            // with its own rounding (1e-17 is a repeating binary fraction).
+            try testing.expectApproxEqAbs(100.0 * delta_y, accum.center_y, 1e-27);
+        }
+    }
 }
 
 test "deep zoom parametrized e-12 to e-30 at user coordinate" {
@@ -2075,16 +2112,17 @@ test "double-click zoom centers on clicked pixel" {
         // When the delta folds (normal zoom), the new center should match
         // the pixel's complex coordinate.  When it stays in offset (deep zoom),
         // the center stays unchanged and the delta lives in offset instead.
-        const center_mag = @max(@abs(tc.view.center_x), @abs(tc.view.center_y));
-        const fold_eps = center_mag * std.math.floatEps(f64);
+        // Each axis uses its own fold threshold — see computeDragDelta docs.
+        const fold_eps_x = @abs(tc.view.center_x) * std.math.floatEps(f64);
+        const fold_eps_y = @abs(tc.view.center_y) * std.math.floatEps(f64);
 
-        if (@abs(tc.view.offset_x + delta_x) >= fold_eps) {
+        if (@abs(tc.view.offset_x + delta_x) >= fold_eps_x) {
             try testing.expectApproxEqAbs(px_cx, result.center_x, 1e-12);
         } else {
             try testing.expectEqual(tc.view.center_x, result.center_x);
             try testing.expectApproxEqAbs(tc.view.offset_x + delta_x, result.offset_x, 1e-36);
         }
-        if (@abs(tc.view.offset_y + delta_y) >= fold_eps) {
+        if (@abs(tc.view.offset_y + delta_y) >= fold_eps_y) {
             try testing.expectApproxEqAbs(px_cy, result.center_y, 1e-12);
         } else {
             try testing.expectEqual(tc.view.center_y, result.center_y);
