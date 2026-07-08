@@ -5,12 +5,12 @@
 Interactive Mandelbrot viewer in Zig 0.16 + raylib (via raylib-zig v5.6-dev).
 **Must be cross-platform** — no macOS-only, Win32-only, or Linux-only code.
 All platform-specific behaviour must go through raylib's abstractions.
-Ten source files: `main.zig` (entry), `app.zig` (coordinator — history, animation,
+Eleven source files: `main.zig` (entry), `app.zig` (coordinator — history, animation,
 rendering), `input.zig` (keyboard/mouse/textbox input), `ui.zig` (drawing, toolbar,
 tooltips), `renderer.zig` (multi-threaded rendering), `mandelbrot.zig` (pure math +
 tests), `pixel.zig` (pixel format constants), `log.zig` (timestamping & structured
-logging), `test_runner.zig` (test harness — imports all files with test blocks),
-`integration_tests.zig` (image-based tests).
+logging), `refbank.zig` (reference orbit bank grid), `test_runner.zig` (test harness —
+imports all files with test blocks), `integration_tests.zig` (image-based tests).
 
 ## Zig conventions
 
@@ -100,6 +100,8 @@ Key tests for regression detection:
 - **pixel-center mapping invariant** — geometry of the mapping formula
 - **deep zoom smoke** — perturbation + f64 fallback at Seahorse Valley
 - **timeout** — custom atomic clock, verifies partial render
+- **RefBank 1×1 matches single-reference** — every pixel same via bank center vs direct
+- **RefBank 3×3 consistent at deep zoom** — all pixels produce finite mu at range 1e-8
 
 ## Debugging notes
 
@@ -351,36 +353,80 @@ Adding a small offset to a large coordinate rounds away if the offset is
 smaller than ~1 ULP.  The offset mechanism (`offset_x`/`offset_y`) works
 around this for accumulated deltas, but the per-pixel computation
 `(px+0.5) * range/w` must resolve each pixel's position through the
-`left`/`top` formulas.  The practical floor:
+`left`/`top` formulas.
+
+**f128 fallback (2026-07-08):** The fallback path (`rebaseFallback`) now
+uses f128 arithmetic internally.  f128 has a 112-bit mantissa (ULP ≈
+2.4e-34 at |coord| ≈ 1), which resolves per-pixel coordinate differences
+down to `range/w ≈ 1e-32`.  This extends the fallback precision limit
+from `range ≈ 4e-13` (f64 ULP wall) to `range ≈ 1e-28` (the perturbation
+path's own limit).  The f128 `pixel_cx/pixel_cy` values are computed in
+the renderer from view-state fields using f128 arithmetic, so the entire
+`left + (px+0.5)*step` computation is quad-precision.
+
+**Practical floors:**
 
 | Component | Limit | Why |
 |-----------|-------|-----|
-| **x-pixels on antenna** | `range ≈ 1e-28` | `range/w` becomes invisible at the scale of the accumulated x-offset (~3e-16) |
-| **y-pixels on real axis** | essentially unlimited | center_y=0 means zero precision loss (subnormals); x-axis is always the bottleneck |
-| **y-pixels off real axis** | `range ≈ 1e-28` at |cy| ≈ 1e-14 | once center_y grows, same ULP constraints as x-axis |
+| **x-pixels on antenna (f64 fallback)** | `range ≈ 1e-28` | f128 fallback resolves down to ~2.4e-34; perturbation path's dcx subnormals are the new floor |
+| **x-pixels on antenna (perturbation)** | `range ≈ 1e-28` | dcx/dy approach f64 subnormal range at this scale |
+| **y-pixels on real axis** | essentially unlimited | center_y=0 means zero precision loss (subnormals) |
+| **y-pixels off real axis** | same as x-axis | f128 fallback covers all practical zoom levels |
 
 ### What happens at each regime
 
-| Range | Mechanism | Can distinguish pixels? |
-|-------|-----------|----------------------|
-| `> 3e-16` | f64 fallback folds deltas into center | Yes (standard zoom) |
-| `3e-16` to `1e-28` | Perturbation + offset mechanism | Yes, via small-magnitude `dcx`/`dcy` |
-| `< 1e-28` | Perturbation still works but `range/w` step rounds away | No — adjacent x-pixels get same coordinate |
+| Range | Can distinguish x-pixels? | Notes |
+|-------|--------------------------|-------|
+| `> 4e-13` | Yes | All render paths — f64 is sufficient |
+| `4e-13` to `1e-28` | Yes (f128 fallback) | `rebaseFallbackF128` preserves per-pixel C when perturbation fails; perturbation path works directly |
+| `< 1e-28` | No | `range/w` step rounds to zero even in f128; dcx/dcy enter subnormal range |
 
-### The all-interior case
+### f128 implementation details
 
-On the real axis (y=0 within [-2, 0.25]), the entire viewport is inside
-the Mandelbrot set.  Perturbation cannot find an escaping reference, so
-the f64 fallback (`rebaseFallback`) is used.  Below `range ≈ 3e-16` this
-produces the same f64 value for every x-pixel — but that's harmless
-because every pixel IS interior.  The render is uniformly black, which is
-correct.
+The f128 pixel coordinate is computed in `renderStrip`:
+```zig
+const pixel_step_f128 = cfg.range_x_f128 / @as(f128, @floatFromInt(w));
+const cx_f128 = cfg.left_f128 + (@as(f128, @floatFromInt(px)) + 0.5) * pixel_step_f128;
+```
 
-**The trap:** the old `computeDragDelta` (single fold_eps from max component)
-could accumulate phantom y-shifts in `offset_y`, pushing the viewport off
-the real axis into exterior territory.  With per-component fold thresholds,
-this is fixed — center_y stays precisely at 0 when the user stays on the
-real axis.
+`cfg.left_f128` is computed from the view state in f128, preserving the
+small `range/2` term that rounds away in f64.  The function
+`rebaseFallbackF128(zx: f128, zy: f128, cx: f128, cy: f128, ...)` performs
+the full Mandelbrot recurrence in f128 — all 6 fallback sites in
+`renderPerturbationPixel` now call it.
+
+On Apple Silicon, f128 is software-emulated (~20-50× per op), but the
+fallback is rare: it only fires when perturbation can't continue
+(glitch, overflow, |δ| > |Z|).  At extreme zoom where the viewport is
+mostly deep-interior, the boundary layer needing fallback is a tiny
+fraction of pixels.
+
+### The real-axis trap: when perturbation also fails
+
+Even at extreme zoom on the real axis (y ≈ 0, x in [-2, 0.25]), the
+f128 fallback now distinguishes per-pixel x-coordinates.  The reference
+orbit may overflow, but `rebaseFallbackF128` starts each pixel from its
+own `C = cx_f128 + i*cy_f128` and iterates in quad precision, so adjacent
+pixels with `|cx₁ - cx₂| ≈ 1e-32` produce different iteration counts.
+The horizontal banding artifact is resolved.
+
+The all-interior case (pure black) still applies identically — f128 just
+gives correct uniform black.
+
+**Performance note:** The f128 fallback is correct but slower.  At the
+deepest zoom levels where the entire viewport is interior, no fallback
+is needed at all (cardioid/bulb pre-check or perturbation handles it).
+Only the boundary fringe where |z|² > 4 triggers f128 — typically a
+few hundred pixels max, adding ~50–200ms to the render.
+
+### Split-coordinate fallback design (superseded)
+
+The split-coordinate design previously described here (Kahan summation
+in f64) is **superseded** by the f128 fallback.  Using quad precision
+directly is simpler, more robust, and handles all cases uniformly.  The
+only remaining gap is the fundamental f128 floor at range < 1e-28,
+where even `f128(px+0.5)*range/w` rounds to zero — no practical
+Mandelbrot viewer can meaningfully display at that scale.
 
 ### When to suspect a precision limit
 
@@ -392,6 +438,60 @@ real axis.
 3. **`[drag] zoom` log entries show center_y drifting away from 0** on the
    real axis — indicates the old fold_eps bug.  Fix already applied in
    commit with per-component fold thresholds.
+4. **Horizontal stripes at range < 4e-13 on the real axis** — expected
+   f64 precision limit, not a bug (see split-coordinate fallback design
+   above if fixing this is desired).
+
+## RefBank architecture
+
+`src/refbank.zig` implements a grid-based reference orbit bank that
+replaces the previous single-reference perturbation renderer.
+
+### Why RefBank
+
+Single-reference perturbation fails when the pixel's δ (distance from the
+reference orbit) is large, triggering glitch detection.  This happens
+when the viewport contains features far from the reference point —
+especially at moderate zoom where the reference is chosen from the
+viewport center but edge pixels have large δ.
+
+The RefBank distributes reference orbits in a grid across the viewport
+so each pixel uses the nearest escaping reference, minimizing δ and
+reducing glitch triggers.
+
+### Grid layout
+
+- **`.auto` and `.perturbation` modes:** 1×1 grid (single center reference).
+  Previously used a 3×3 grid (10 references) in `.auto` mode at deep zoom
+  (`pixel_step < 1e-12`), but this was removed in 2026-07-08 because the
+  Voronoi cell boundaries between different escaping references produced
+  visible horizontal stripe artifacts at extreme depth (range ~1.77e-16).
+  Single-reference perturbation avoids the seam problem entirely.
+- **`.f64` mode:** No RefBank — uses direct f64 `rebaseFallback`.
+
+### Integration in render pipeline
+
+1. `renderMandelbrot` in `renderer.zig` calls `refbank.buildRefBank()`
+   before spawning threads.
+2. `RenderConfig.ref_bank` carries the `?m.RefBank` into each thread.
+3. `renderStrip` does per-pixel `bank.nearest(cx_f64, cy_f64)` lookup
+   to find the closest escaping reference, then calls
+   `renderPerturbationPixel(cx - ref.cx, cy - ref.cy, ref.orbit, ...)`.
+4. If no escaping reference exists (all interior), the RefBank is
+   deallocated and the render falls through to `rebaseFallback` or
+   `standardPixel`.
+
+### Memory
+
+Each reference orbit allocates `max_iters` entries of `RefOrbit` (16 bytes
+each).  A 1×1 bank at 8192 iterations allocates 8192 × 16 = ~128 KB.
+The bank is freed after rendering via `ref_bank.deinit()`.
+
+### Logging
+
+```
+2026-07-05T21:53:03.960Z [refbank] grid=1x1 total=1 escaped=1 range=2.9000e0
+```
 
 ## Release process
 
@@ -471,6 +571,7 @@ grep 'keytrace' debug.log           # raw key state (pressed/down every frame a 
 | `keytrace` | raw key state | left/right isKeyPressed, isKeyDown, history ptr/len, anim state |
 | `render` | timeout, continue | — |
 | `alloc` | allocator initialization | DebugAllocator or page_allocator |
+| `refbank` | reference bank build | grid dimensions, total/escaped counts, range |
 
 ### Interpreting logs
 
@@ -485,3 +586,23 @@ grep 'keytrace' debug.log           # raw key state (pressed/down every frame a 
   history ptr/len).  Only logged on frames where at least one is `true`.
 - Timestamps are UTC, monotonic within a session
 - No output = idle frames (nothing user-initiated occurred during those gaps)
+- `[refbank] grid=1x1 total=1 escaped=6 range=2.9e0` → 1×1 bank built with
+  1 reference orbit, 6 escaped, covering the given viewport range
+
+## Session history
+
+| Date | Issue | Root cause | Fix |
+|------|-------|-----------|-----|
+| 2026-07-05 | Circle artifacts at deep zoom | Glitch-detection fallback started all glitching pixels from Z=C at iter 0 → same orbit → circular bands | Changed to continue from per-pixel Z (`rebase_zx`) and current iteration (`iter`) |
+| 2026-07-05 | Horizontal banding at range < 4e-13 on real axis | Reference orbit overflows to infinity → scratch-start fallback loses per-pixel x-variation (f64 ULP limit) | Not yet fixed (see split-coordinate fallback design); RefBank partially mitigates |
+| 2026-07-05 | RefBank implementation | Single-reference perturbation fails at moderate zoom due to large δ at edge pixels | 3×3 grid of reference orbits; per-pixel nearest escaping reference lookup |
+| 2026-07-08 | Voronoi stripe artifacts at deep zoom | 3×3 RefBank grid creates visible seams at Voronoi cell boundaries between different escaping references (range ~1.77e-16) | Removed adaptive 3×3 grid; always use 1×1 single-reference in `.auto` and `.perturbation` modes |
+| 2026-07-08 | f128 fallback for rebaseFallback | f64 fallback loses per-pixel C variation at range < 4e-13 (|C+step| rounds to |C|) — causes horizontal banding on real axis, colorful patches off-axis | `rebaseFallbackF128(zx, zy, cx, cy, ...)` — f128 arithmetic preserves 112-bit mantissa, resolves down to ~range/w ≈ 1e-32; f128 pixel coords computed in renderStrip from f128 view-state fields; all 6 fallback sites in renderPerturbationPixel call it |
+| 2026-07-04 | Startup double-poll bug | Stale OS event caused phantom key state → first press swallowed | Removed all startup polling |
+| 2026-07-04 | Idle-timer key-swallow bug | Uninitialised `[64]HistoryEntry` — stale stack bytes corrupted `history_ptr` | `@memset` zero after struct literal |
+| 2026-07-04 | Drag-to-zoom key-swallow bug | Same uninitialised history as idle-timer variant | Same fix |
+| 2026-07-07 | Left-arrow first press lost after zoom | Raylib `isKeyPressed()` missed quick taps where GLFW_PRESS + GLFW_RELEASE both fire within a single `PollInputEvents` interval (in raylib 5.6.0-dev, polling happens at the end of `EndDrawing`, after `WaitForTargetFPS` creates a ~14ms window where events accumulate). `currentKeyState` net = 0, `previousKeyState` = 0 → `IsKeyPressed` returns false. | Use `getKeyPressed()` (reads from raylib's key-pressed queue, populated by the PRESS callback) as a fallback when `isKeyPressed` misses the arrow. `getKeyPressed()` catches the event because the PRESS callback queues it regardless of a subsequent RELEASE in the same poll. |
+
+**Note on left-arrow bugs:** left-arrow navigation failures are almost always related to the input polling mechanism, not to renders, animations, or history state. The two previous instances (2026-07-04) were caused by uninitialised memory corrupting `history_ptr` — those manifested as `history back ignored` or `skipped tb_active` in the log. The 2026-07-07 instance manifests as **no keytrace log at all** (`isKeyPressed` and `isKeyDown` both false). If a left-arrow bug is reported and the keytrace shows a press event, look at history/state/logic. If no keytrace appears, it's a polling timing issue and the fix is to use `getKeyPressed()` as a fallback.
+
+Details in `docs/session-summary-2026-07-05.md`.

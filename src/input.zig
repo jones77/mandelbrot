@@ -7,6 +7,7 @@ const app = @import("app.zig");
 
 const TOTAL_TOP = ui.TOTAL_TOP;
 const LINE1_H = ui.LINE1_H;
+const LINE2_H = ui.LINE2_H;
 const TB_H = ui.TB_H;
 const ASCII_PRN_MIN = ui.ASCII_PRN_MIN;
 const ASCII_PRN_MAX = ui.ASCII_PRN_MAX;
@@ -41,6 +42,7 @@ pub fn handleInput(self: *app.App) !void {
 
     if (in_top and rl.isMouseButtonPressed(.left)) {
         const tb_y: i32 = (LINE1_H - TB_H) / 2;
+        const btn_y: i32 = LINE1_H + (LINE2_H - TB_H) / 2;
         const tb = ui.ToolbarLayout.compute(self.render_w);
         const in_tb = mx >= tb.tb_start_x and mx < tb.tb_start_x + tb.tb_w and my >= tb_y and my < tb_y + TB_H;
         if (in_tb) {
@@ -54,16 +56,16 @@ pub fn handleInput(self: *app.App) !void {
             }
             if (mx >= tb.arrow_l_x and mx < tb.arrow_l_x + ui.BTN_ARROW and my >= tb_y and my < tb_y + TB_H) { try self.navigateHistoryBack(); tb_click_consumed = true; }
             if (mx >= tb.arrow_r_x and mx < tb.arrow_r_x + ui.BTN_ARROW and my >= tb_y and my < tb_y + TB_H) { try self.navigateHistoryForward(); tb_click_consumed = true; }
-            if (mx >= tb.inc_x and mx < tb.inc_x + ui.BTN_ITER and my >= tb_y and my < tb_y + TB_H) { try self.adjustIters(true); tb_click_consumed = true; }
-            if (mx >= tb.dec_x and mx < tb.dec_x + ui.BTN_ITER and my >= tb_y and my < tb_y + TB_H) { try self.adjustIters(false); tb_click_consumed = true; }
-            if (mx >= tb.copy_x and mx < tb.copy_x + ui.BTN_LG and my >= tb_y and my < tb_y + TB_H) {
-                const VIEW_FMT = "x={d:.8} y={d:.8} range={e:.8} iters={d}";
+            if (mx >= tb.inc_x and mx < tb.inc_x + ui.BTN_ITER and my >= btn_y and my < btn_y + TB_H) { try self.adjustIters(true); tb_click_consumed = true; }
+            if (mx >= tb.dec_x and mx < tb.dec_x + ui.BTN_ITER and my >= btn_y and my < btn_y + TB_H) { try self.adjustIters(false); tb_click_consumed = true; }
+            if (mx >= tb.copy_x and mx < tb.copy_x + ui.BTN_LG and my >= btn_y and my < btn_y + TB_H) {
+                const VIEW_FMT = "x={e:.16} y={e:.16} range={e:.8} iters={d}";
                 var buf: [256]u8 = undefined;
-                rl.setClipboardText(std.fmt.bufPrintZ(&buf, VIEW_FMT, .{self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters}) catch unreachable);
+                rl.setClipboardText(std.fmt.bufPrintZ(&buf, VIEW_FMT, .{self.view.center_x + self.view.offset_x, self.view.center_y + self.view.offset_y, self.view.range, self.view.max_iters}) catch unreachable);
                 logEvent(.ui, "clipboard copy", .{});
                 tb_click_consumed = true;
             }
-            if (mx >= tb.paste_x and mx < tb.paste_x + ui.BTN_LG and my >= tb_y and my < tb_y + TB_H) {
+            if (mx >= tb.paste_x and mx < tb.paste_x + ui.BTN_LG and my >= btn_y and my < btn_y + TB_H) {
                 const clip = std.mem.sliceTo(rl.getClipboardText(), 0);
                 if (clip.len > 0) {
                     self.tb_buf.format("{s}", .{clip});
@@ -73,8 +75,8 @@ pub fn handleInput(self: *app.App) !void {
                 }
                 tb_click_consumed = true;
             }
-            if (mx >= tb.reset_x and mx < tb.reset_x + ui.BTN_RESET and my >= tb_y and my < tb_y + TB_H) { try self.resetView(); tb_click_consumed = true; }
-            if (my >= LINE1_H and my < TOTAL_TOP) {
+            if (mx >= tb.reset_x and mx < tb.reset_x + ui.BTN_RESET and my >= btn_y and my < btn_y + TB_H) { try self.resetView(); tb_click_consumed = true; }
+            if (my >= LINE1_H + LINE2_H and my < TOTAL_TOP) {
                 const chk_x = self.render_w - TOP_PAD - @as(i32, @intFromFloat(self.tooltip_label_w));
                 if (mx >= chk_x and mx < self.render_w - TOP_PAD) { self.tooltip_enabled = !self.tooltip_enabled; tb_click_consumed = true; }
             }
@@ -88,10 +90,29 @@ pub fn handleInput(self: *app.App) !void {
     }
 
     if (!self.tb_active) {
+        var did_nav = false;
         if (left_pressed) {
             try self.navigateHistoryBack();
+            did_nav = true;
         } else if (right_pressed) {
             try self.navigateHistoryForward();
+            did_nav = true;
+        }
+        // Also drain the key-pressed queue: getKeyPressed() records
+        // every GLFW_PRESS event regardless of a subsequent release in
+        // the same PollInputEvents interval.  This catches quick taps
+        // that isKeyPressed() misses (both press and release between
+        // two EndDrawing polls).
+        if (!did_nav) {
+            var key = rl.getKeyPressed();
+            while (key != .null) {
+                if (key == .left) {
+                    try self.navigateHistoryBack();
+                } else if (key == .right) {
+                    try self.navigateHistoryForward();
+                }
+                key = rl.getKeyPressed();
+            }
         }
     } else {
         if (left_pressed) self.logInputEvent("left", "skipped", "tb_active");
@@ -171,6 +192,7 @@ pub fn handleInput(self: *app.App) !void {
             const to_view = m.ViewState{.center_x=delta.center_x,.center_y=delta.center_y,.offset_x=delta.offset_x,.offset_y=delta.offset_y,.range=new_range,.max_iters=self.view.max_iters};
             try self.captureAnimationFrame();
             self.view = to_view;
+            std.debug.print("x={e:.16} y={e:.16} range={e:.8} iters={d}\n", .{ delta.center_x + delta.offset_x, delta.center_y + delta.offset_y, new_range, self.view.max_iters });
             _ = try self.renderFresh(true);
             self.anim.from_view = from_view;
             self.anim.to_view = to_view;

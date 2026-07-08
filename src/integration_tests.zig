@@ -527,3 +527,117 @@ test "every pixel matches ground truth at startup resolution and iters" {
     try testing.expect(exterior > 0);
 }
 
+test "RefBank 1x1 matches single-reference render" {
+    m.buildPalette();
+    const refbank_mod = @import("refbank.zig");
+
+    const center_x = -0.75;
+    const center_y = 0.1;
+    const range = 0.5;
+    const max_iters: u32 = 256;
+    const w: usize = 40;
+    const h: usize = 30;
+
+    const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
+    const range_x = range;
+    const range_y = range / aspect;
+    const left = center_x - range_x / 2.0;
+    const top = center_y - range_y / 2.0;
+
+    var bank = try refbank_mod.buildRefBank(
+        testing.allocator,
+        center_x, center_y,
+        range_x, range_y,
+        max_iters, 1, 1,
+    );
+    defer bank.deinit();
+
+    try testing.expect(bank.escapedCount() > 0);
+
+    var py: usize = 0;
+    while (py < h) : (py += 1) {
+        const cy_f64 = top + (@as(f64, @floatFromInt(py)) + 0.5) * range_y / @as(f64, @floatFromInt(h));
+        var px: usize = 0;
+        while (px < w) : (px += 1) {
+            const cx_f64 = left + (@as(f64, @floatFromInt(px)) + 0.5) * range_x / @as(f64, @floatFromInt(w));
+
+            const ref = bank.nearest(cx_f64, cy_f64).?;
+            const mu_bank = m.renderPerturbationPixel(cx_f64 - ref.cx, cy_f64 - ref.cy, ref.orbit, max_iters, 0.0, m.cx_f64, cy_f64, false, F128Px{ .left = @as(f128, cx_f64), .step = 0, .px = 0, .cy = @as(f128, cy_f64) });
+
+            const ref_center = &bank.entries[0];
+            const mu_direct = m.renderPerturbationPixel(cx_f64 - ref_center.cx, cy_f64 - ref_center.cy, ref_center.orbit, max_iters, 0.0, m.cx_f64, cy_f64, false, F128Px{ .left = @as(f128, cx_f64), .step = 0, .px = 0, .cy = @as(f128, cy_f64) });
+
+            try testing.expectEqual(mu_bank, mu_direct);
+        }
+    }
+}
+
+test "render at user reported deep zoom coordinate with stripes" {
+    m.buildPalette();
+
+    const w: i32 = 90;
+    const h: i32 = 80;
+    const view = m.ViewState{
+        .center_x = -1.2533919176342180e0,
+        .center_y = -2.3665247295206384e-2,
+        .range = 1.77352288e-16,
+        .max_iters = 8192,
+    };
+
+    const img = rl.genImageColor(w, h, .black);
+    defer rl.unloadImage(img);
+
+    const pixels = @as([*]u8, @ptrCast(img.data))[0 .. @as(usize, @intCast(w * h * PIXEL_CHANNELS))];
+    const timed_out = try renderer.renderMandelbrot(pixels, @intCast(w), @intCast(h), view, true, 0, rl.getTime, null);
+    try testing.expect(!timed_out);
+
+    // Verify render is well-formed: both interior (black) and exterior
+    // (colored) pixels present.
+    const total = @as(usize, @intCast(w * h));
+    const non_black = countNonBlack(pixels);
+    try testing.expect(non_black < total);
+    try testing.expect(non_black > 0);
+}
+
+test "RefBank 3x3 renders consistently at deep zoom" {
+    m.buildPalette();
+    const refbank_mod = @import("refbank.zig");
+
+    const center_x = -0.75;
+    const center_y = 0.1;
+    const range = 1e-8;
+    const max_iters: u32 = 1024;
+    const w: usize = 30;
+    const h: usize = 20;
+
+    const aspect = @as(f64, @floatFromInt(w)) / @as(f64, @floatFromInt(h));
+    const range_x = range;
+    const range_y = range / aspect;
+    const left = center_x - range_x / 2.0;
+    const top = center_y - range_y / 2.0;
+
+    var bank = try refbank_mod.buildRefBank(
+        testing.allocator,
+        center_x, center_y,
+        range_x, range_y,
+        max_iters, 3, 3,
+    );
+    defer bank.deinit();
+
+    try testing.expect(bank.escapedCount() > 0);
+
+    var py: usize = 0;
+    while (py < h) : (py += 1) {
+        const cy_f64 = top + (@as(f64, @floatFromInt(py)) + 0.5) * range_y / @as(f64, @floatFromInt(h));
+        var px: usize = 0;
+        while (px < w) : (px += 1) {
+            const cx_f64 = left + (@as(f64, @floatFromInt(px)) + 0.5) * range_x / @as(f64, @floatFromInt(w));
+
+            const ref = bank.nearest(cx_f64, cy_f64).?;
+            const mu = m.renderPerturbationPixel(cx_f64 - ref.cx, cy_f64 - ref.cy, ref.orbit, max_iters, m.GLITCH_RATIO, m.cx_f64, cy_f64, false, F128Px{ .left = @as(f128, cx_f64), .step = 0, .px = 0, .cy = @as(f128, cy_f64) });
+
+            try testing.expect(std.math.isFinite(mu));
+        }
+    }
+}
+

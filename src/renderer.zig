@@ -2,6 +2,7 @@ const std = @import("std");
 const m = @import("mandelbrot.zig");
 const PIXEL_CHANNELS = @import("pixel.zig").PIXEL_CHANNELS;
 const isoNow = @import("log.zig").isoNow;
+const refbank = @import("refbank.zig");
 const allocator = @import("allocator.zig");
 
 const MAX_RENDER_THREADS: usize = 8;
@@ -15,6 +16,10 @@ const RenderConfig = struct {
     top: f64,
     range_x: f64,
     range_y: f64,
+    left_f128: f128,
+    top_f128: f128,
+    range_x_f128: f128,
+    range_y_f128: f128,
     max_iters: u32,
     skip_periodicity: bool,
     render_method: m.RenderMethod,
@@ -23,15 +28,10 @@ const RenderConfig = struct {
     interior_eps_sq: f32,
     periodicity_eps_sq: f32,
     glitch_ratio: f32,
-    ref_orbit: ?[]const m.RefOrbit,
-    use_perturbation: bool,
+    ref_bank: ?m.RefBank,
     rows_completed: ?[]bool,
     offset_x: f64,
     offset_y: f64,
-    /// Offset from the view center to the chosen reference point.
-    /// Zero when the reference is at the view center.
-    ref_delta_x: f64,
-    ref_delta_y: f64,
 };
 
 const RenderStrip = struct {
@@ -71,9 +71,19 @@ fn renderStrip(ctx: *RenderStrip) void {
         const cy: f32 = @floatCast(cy_f64);
         const cy2 = cy * cy;
 
+        // Per-strip y-offset (constant for all x pixels in this strip).
+        const half_range_x = 0.5 * cfg.range_x;
+        const half_step_x = 0.5 * pixel_step;
+        const strip_pixel_oy = ((@as(f64, @floatFromInt(py)) + 0.5) / @as(f64, @floatFromInt(h)) - 0.5) * cfg.range_y;
+        const strip_pixel_rel_cy = cfg.offset_y + strip_pixel_oy;
+
+        const pixel_step_f128 = cfg.range_x_f128 / @as(f128, @floatFromInt(w));
+        const cy_f128 = cfg.top_f128 + (@as(f128, @floatFromInt(py)) + 0.5) * @as(f128, cfg.range_y_f128) / @as(f128, @floatFromInt(h));
+
         var px: usize = 0;
+        var pixel_rel_cx = cfg.offset_x + half_step_x - half_range_x; // (px+0.5)*step_x - half_range for px=0
         while (px < w) : (px += 1) {
-            const cx_f64 = cfg.left + (@as(f64, @floatFromInt(px)) + 0.5) * cfg.range_x / @as(f64, @floatFromInt(w));
+            const cx_f64 = cfg.left + (@as(f64, @floatFromInt(px)) + 0.5) * pixel_step;
             const cx: f32 = @floatCast(cx_f64);
 
             // Cardioid & period-2 bulb pre-check (always interior, skip iteration).
@@ -82,17 +92,27 @@ fn renderStrip(ctx: *RenderStrip) void {
             const max_f: f32 = @as(f32, @floatFromInt(max_iters));
             const pix_idx = (py * w + px) * PIXEL_CHANNELS;
 
-            // Path selection: perturbation (if useful and available) > f64 (if ref exists or deep zoom) > f32 standard.
+            // Path selection: RefBank perturbation (nearest escaping ref) > f128 fallback (deep zoom / no bank) > f32 standard.
             // Pixel-centre convention used in all paths — see comment above.
-            const mu: f32 = if (cfg.use_perturbation) blk: {
-                const orbit = cfg.ref_orbit.?;
-                const dcx = (@as(f64, @floatFromInt(px)) + 0.5) * cfg.range_x / @as(f64, @floatFromInt(w)) - 0.5 * cfg.range_x + cfg.offset_x + cfg.ref_delta_x;
-                const dcy = (@as(f64, @floatFromInt(py)) + 0.5) * cfg.range_y / @as(f64, @floatFromInt(h)) - 0.5 * cfg.range_y + cfg.offset_y + cfg.ref_delta_y;
-                break :blk m.renderPerturbationPixel(dcx, dcy, orbit, max_iters, cfg.glitch_ratio);
-            } else if (cfg.ref_orbit != null or render_fallback_f64)
+            //
+            // Nearest-reference lookup and dcx/dcy both use relative coordinates
+            // (small ~range terms, not ~|center|) to preserve precision at deep zoom:
+            //   pixel_rel_cx = offset_x + (px+0.5)*step_x - half_range
+            //   ref.rel_cx   = (grid_col_frac - 0.5) * range_x
+            //   dcx          = pixel_rel_cx - ref.rel_cx
+            const deep_zoom = pixel_step < m.DEEP_ZOOM_PIXEL_STEP;
+            const fpx = m.F128Px{ .left = cfg.left_f128, .step = pixel_step_f128, .px = px, .cy = cy_f128 };
+            const mu: f32 = if (cfg.ref_bank) |bank| blk: {
+                const ref = bank.nearestByOffset(pixel_rel_cx, strip_pixel_rel_cy) orelse &bank.entries[0];
+                const dcx = pixel_rel_cx - ref.rel_cx;
+                const dcy = strip_pixel_rel_cy - ref.rel_cy;
+                break :blk m.renderPerturbationPixel(dcx, dcy, ref.orbit, max_iters, cfg.glitch_ratio, cx_f64, cy_f64, deep_zoom, fpx);
+            } else if (render_fallback_f64)
                 m.rebaseFallback(cx_f64, cy_f64, cx_f64, cy_f64, 0, max_iters)
             else
                 m.standardPixel(cx, cy, max_iters, cfg.interior_eps_sq, cfg.periodicity_eps_sq);
+
+            pixel_rel_cx += pixel_step;
 
             if (mu >= max_f) continue;
             const color = m.smoothColor(@as(f64, mu), max_iters);
@@ -138,8 +158,10 @@ pub fn renderMandelbrot(
     const range_x = view.range;
     const range_y = view.range / aspect;
     const left = view.center_x + view.offset_x - range_x / 2.0;
+    const left_f128 = @as(f128, view.center_x) + @as(f128, view.offset_x) - @as(f128, range_x) / 2.0;
     const right = view.center_x + view.offset_x + range_x / 2.0;
     const top = view.center_y + view.offset_y - range_y / 2.0;
+    const top_f128 = @as(f128, view.center_y) + @as(f128, view.offset_y) - @as(f128, range_y) / 2.0;
     const bottom = view.center_y + view.offset_y + range_y / 2.0;
 
     if (clear) {
@@ -152,69 +174,38 @@ pub fn renderMandelbrot(
     const interior_eps_sq: f32 = m.INTERIOR_BASE_EPSILON_SQ;
     const periodicity_eps_sq: f32 = m.PERIODICITY_BASE_EPSILON_SQ;
 
-    // --- Reference orbit selection ---
-    // Perturbation needs a reference orbit whose Z diverges (|Z| → ∞).
-    // At deep zoom, the view center may be interior (no escape), which
-    // makes perturbation unusable.  Try candidate points within the view
-    // to find an escaping reference.
-    //
-    // When a non-center reference is used, ref_delta captures the offset
-    // from view center to the chosen reference.  The per-pixel dcx/dcy
-    // formula then adds this delta so that δ = pixel_c - ref_c.
-    const ref_candidates = if (view.render_method != .f64) blk: {
-        var ref_cx = view.center_x;
-        var ref_cy = view.center_y;
-        var orbit = try m.computeReference(view.center_x, view.center_y, view.max_iters, allocator.get());
-
-        const isEscaped = struct {
-            fn check(o: []const m.RefOrbit) bool {
-                if (o.len == 0) return false;
-                const last = o[o.len - 1];
-                const nsq = last.zx * last.zx + last.zy * last.zy;
-                return !std.math.isFinite(nsq) or nsq > m.ESCAPE_RADIUS_SQ;
-            }
-        }.check;
-
-        if (!isEscaped(orbit)) {
-            // Try offsets of ±range/2 along each axis (within the viewport).
-            const try_points = [_][2]f64{
-                .{ view.center_x + range_x * 0.5, view.center_y },
-                .{ view.center_x - range_x * 0.5, view.center_y },
-                .{ view.center_x, view.center_y + range_y * 0.5 },
-                .{ view.center_x, view.center_y - range_y * 0.5 },
-                .{ view.center_x + range_x * 0.25, view.center_y + range_y * 0.25 },
-                .{ view.center_x - range_x * 0.25, view.center_y - range_y * 0.25 },
-            };
-            for (try_points) |pt| {
-                allocator.get().free(orbit);
-                orbit = try m.computeReference(pt[0], pt[1], view.max_iters, allocator.get());
-                if (isEscaped(orbit)) {
-                    ref_cx = pt[0];
-                    ref_cy = pt[1];
-                    break;
-                }
-            }
-        }
-
-        break :blk struct { orbit: []const m.RefOrbit, ref_cx: f64, ref_cy: f64, escaped: bool }{
-            .orbit = orbit,
-            .ref_cx = ref_cx,
-            .ref_cy = ref_cy,
-            .escaped = isEscaped(orbit),
+    // --- Reference orbit bank ---
+    // Build a grid of reference orbits across the viewport.  Each pixel
+    // selects the nearest escaping reference, reducing perturbation δ and
+    // glitch triggers.  At deep zoom the off-axis candidates often escape
+    // even when the viewport center is interior (real-axis case).
+    var ref_bank: ?m.RefBank = if (view.render_method != .f64) blk: {
+        const grid_cols: usize = 1;
+        const grid_rows: usize = 1;
+        var bank = refbank.buildRefBank(
+            allocator.get(),
+            view.center_x, view.center_y,
+            range_x, range_y,
+            view.max_iters,
+            grid_cols, grid_rows,
+        ) catch |err| {
+            std.debug.print("refbank build error: {}\n", .{err});
+            break :blk null;
         };
+        if (bank.escapedCount() == 0 and view.render_method != .perturbation) {
+            bank.deinit();
+            break :blk null;
+        }
+        {
+            var ts_buf: [24]u8 = undefined;
+            std.debug.print("{s} [refbank] grid={d}x{d} total={d} escaped={d} range={e:.4}\n", .{
+                isoNow(&ts_buf), grid_cols, grid_rows,
+                bank.entries.len, bank.escapedCount(), view.range,
+            });
+        }
+        break :blk bank;
     } else null;
-    defer if (ref_candidates) |rc| allocator.get().free(rc.orbit);
-
-    const ref_orbit: ?[]const m.RefOrbit = if (ref_candidates) |rc| rc.orbit else null;
-    const ref_escaped = if (ref_candidates) |rc| rc.escaped else false;
-    const ref_delta_x = if (ref_candidates) |rc| view.center_x - rc.ref_cx else 0;
-    const ref_delta_y = if (ref_candidates) |rc| view.center_y - rc.ref_cy else 0;
-
-    // Only use perturbation when the reference actually escaped (|Z| grows
-    // without bound). Using it with a non-escaped (interior) reference
-    // produces incorrect results because perturbation assumes |Z| diverges.
-    // .perturbation mode forces perturbation regardless of escape status.
-    const use_perturbation = ref_escaped or view.render_method == .perturbation;
+    defer if (ref_bank) |*b| b.deinit();
 
     var num_threads: usize = height / MIN_ROWS_PER_THREAD;
     if (num_threads > MAX_RENDER_THREADS) num_threads = MAX_RENDER_THREADS;
@@ -230,6 +221,10 @@ pub fn renderMandelbrot(
         .top = top,
         .range_x = range_x,
         .range_y = range_y,
+        .left_f128 = left_f128,
+        .top_f128 = top_f128,
+        .range_x_f128 = @as(f128, range_x),
+        .range_y_f128 = @as(f128, range_y),
         .max_iters = view.max_iters,
         .skip_periodicity = skip_periodicity,
         .render_method = view.render_method,
@@ -238,13 +233,10 @@ pub fn renderMandelbrot(
         .interior_eps_sq = interior_eps_sq,
         .periodicity_eps_sq = periodicity_eps_sq,
         .glitch_ratio = m.GLITCH_RATIO,
-        .ref_orbit = ref_orbit,
-        .use_perturbation = use_perturbation,
+        .ref_bank = ref_bank,
         .rows_completed = rows_completed,
         .offset_x = view.offset_x,
         .offset_y = view.offset_y,
-        .ref_delta_x = ref_delta_x,
-        .ref_delta_y = ref_delta_y,
     };
 
     var strips: [MAX_RENDER_THREADS]RenderStrip = undefined;

@@ -4,7 +4,8 @@ const std = @import("std");
 
 pub const LINE1_H: i32 = 32;
 pub const LINE2_H: i32 = 28;
-pub const TOTAL_TOP: i32 = LINE1_H + LINE2_H;
+pub const LINE3_H: i32 = 28;
+pub const TOTAL_TOP: i32 = LINE1_H + LINE2_H + LINE3_H;
 pub const TOP_PAD: i32 = 4;
 pub const TB_H: i32 = 26;
 pub const BTN_GAP: i32 = 4;
@@ -137,7 +138,7 @@ pub const ToolbarLayout = struct {
         const copy_x = paste_x - BTN_GAP - BTN_LG;
         const dec_x = copy_x - BTN_GAP - BTN_ITER;
         const inc_x = dec_x - BTN_GAP - BTN_ITER;
-        const tb_w = inc_x - BTN_GAP - tb_start_x;
+        const tb_w = render_w - TOP_PAD - tb_start_x;
         return .{ .arrow_l_x = arrow_l_x, .arrow_r_x = arrow_r_x, .tb_start_x = tb_start_x, .tb_w = tb_w, .inc_x = inc_x, .dec_x = dec_x, .copy_x = copy_x, .paste_x = paste_x, .reset_x = reset_x };
     }
 };
@@ -179,14 +180,16 @@ pub fn drawToolbar(
 ) void {
     const CURSOR_W: i32 = 2;
     const CURSOR_H: i32 = 18;
-    const VIEW_FMT = "x={d:.8} y={d:.8} range={e:.8} iters={d}";
+    const VIEW_FMT = "x={e:.16} y={e:.16} range={e:.8} iters={d}";
 
     rl.drawRectangle(0, 0, render_w, LINE1_H, COL_BAR);
     rl.drawRectangle(0, LINE1_H, render_w, 1, COL_SEP);
     rl.drawRectangle(0, LINE1_H + 1, render_w, LINE2_H, COL_BAR);
+    rl.drawRectangle(0, LINE1_H + LINE2_H, render_w, 1, COL_SEP);
+    rl.drawRectangle(0, LINE1_H + LINE2_H + 1, render_w, LINE3_H, COL_BAR);
     rl.drawRectangle(0, TOTAL_TOP - 1, render_w, 1, COL_SEP);
 
-    rl.drawTextEx(font, "double-click/drag to zoom    \xe2\x86\x90 left arrow zooms out    \xe2\x86\x92 right arrow zooms back in    press R to reset", .{ .x = 10, .y = @floatFromInt(LINE1_H + HINT_PAD_Y) }, FONT_SIZE_LG, 1, COL_HINT);
+    rl.drawTextEx(font, "double-click/drag to zoom    \xe2\x86\x90 left arrow zooms out    \xe2\x86\x92 right arrow zooms back in    press R to reset", .{ .x = 10, .y = @floatFromInt(LINE1_H + LINE2_H + HINT_PAD_Y) }, FONT_SIZE_LG, 1, COL_HINT);
 
     const tb_y: i32 = (LINE1_H - TB_H) / 2;
     const tb = ToolbarLayout.compute(render_w);
@@ -195,8 +198,11 @@ pub fn drawToolbar(
     rl.drawRectangleLines(tb.tb_start_x, tb_y, tb.tb_w, TB_H, if (tb_active) COL_TB_BORDER_ACTIVE else COL_TB_BORDER);
 
     var display_buf: [256]u8 = undefined;
-    const display_text = if (tb_active) tb_buf.slice() else std.fmt.bufPrintZ(&display_buf, VIEW_FMT, .{ view.center_x, view.center_y, view.range, view.max_iters }) catch unreachable;
+    const display_text = if (tb_active) tb_buf.slice() else std.fmt.bufPrintZ(&display_buf, VIEW_FMT, .{ view.center_x + view.offset_x, view.center_y + view.offset_y, view.range, view.max_iters }) catch unreachable;
     rl.drawTextEx(font, display_text, .{ .x = @floatFromInt(tb.tb_start_x + PAD_X), .y = @floatFromInt(tb_y + 4) }, FONT_SIZE_LG, 1.0, COL_TEXT);
+
+    drawToolbarArrow(font, tb.arrow_l_x, CP_ARROW_LEFT, tb_y, TB_H, mx, my);
+    drawToolbarArrow(font, tb.arrow_r_x, CP_ARROW_RIGHT, tb_y, TB_H, mx, my);
 
     if (tb_active) {
         const blink = @as(u32, @intFromFloat(rl.getTime() * 2.0)) & 1;
@@ -209,19 +215,18 @@ pub fn drawToolbar(
             rl.drawRectangle(cx, tb_y + 4, CURSOR_W, CURSOR_H, COL_TB_BORDER_ACTIVE);
         }
     }
-    drawToolbarArrow(font, tb.arrow_l_x, CP_ARROW_LEFT, tb_y, TB_H, mx, my);
-    drawToolbarArrow(font, tb.arrow_r_x, CP_ARROW_RIGHT, tb_y, TB_H, mx, my);
-    drawToolbarButton(font, tb.inc_x, BTN_ITER, "inc", btn_w_inc, tb_y, TB_H, mx, my);
-    drawToolbarButton(font, tb.dec_x, BTN_ITER, "dec", btn_w_dec, tb_y, TB_H, mx, my);
-    drawToolbarButton(font, tb.copy_x, BTN_LG, "copy", btn_w_copy, tb_y, TB_H, mx, my);
-    drawToolbarButton(font, tb.paste_x, BTN_LG, "paste", btn_w_paste, tb_y, TB_H, mx, my);
-    drawToolbarButton(font, tb.reset_x, BTN_RESET, "reset", btn_w_reset, tb_y, TB_H, mx, my);
+    const btn_y: i32 = LINE1_H + (LINE2_H - TB_H) / 2;
+    drawToolbarButton(font, tb.inc_x, BTN_ITER, "inc", btn_w_inc, btn_y, TB_H, mx, my);
+    drawToolbarButton(font, tb.dec_x, BTN_ITER, "dec", btn_w_dec, btn_y, TB_H, mx, my);
+    drawToolbarButton(font, tb.copy_x, BTN_LG, "copy", btn_w_copy, btn_y, TB_H, mx, my);
+    drawToolbarButton(font, tb.paste_x, BTN_LG, "paste", btn_w_paste, btn_y, TB_H, mx, my);
+    drawToolbarButton(font, tb.reset_x, BTN_RESET, "reset", btn_w_reset, btn_y, TB_H, mx, my);
 }
 
 pub fn drawTooltipCheckbox(font: rl.Font, render_w: i32, enabled: bool, label_w: f32, mx: i32, my: i32) void {
     const label = if (enabled) TOOLTIP_LABEL else "[ ] tooltip";
     const chk_x = @as(f32, @floatFromInt(render_w)) - @as(f32, @floatFromInt(TOP_PAD)) - label_w;
-    const chk_y = @as(f32, @floatFromInt(LINE1_H)) + @as(f32, @floatFromInt(HINT_PAD_Y));
+    const chk_y = @as(f32, @floatFromInt(LINE1_H + LINE2_H)) + @as(f32, @floatFromInt(HINT_PAD_Y));
     const hover = @as(f32, @floatFromInt(mx)) >= chk_x and @as(f32, @floatFromInt(mx)) < chk_x + label_w and
         @as(f32, @floatFromInt(my)) >= chk_y and @as(f32, @floatFromInt(my)) < chk_y + FONT_SIZE_LG;
     rl.drawTextEx(font, label, .{ .x = chk_x, .y = chk_y }, FONT_SIZE_LG, 1, if (hover) COL_TEXT else COL_HINT);
@@ -254,7 +259,7 @@ pub fn drawCoordinateTooltip(
 
     const coord = pixelCenterToComplex(view, img_w, img_h, @floor(phys_px), @floor(phys_py));
     var buf: [128]u8 = undefined;
-    const text = std.fmt.bufPrintZ(&buf, "x={d:.8}  y={d:.8}", .{coord.x, coord.y}) catch unreachable;
+    const text = std.fmt.bufPrintZ(&buf, "x={e:.16}  y={e:.16}", .{coord.x, coord.y}) catch unreachable;
 
     const sz = rl.measureTextEx(font, text, FONT_SIZE_LG, 1);
     const tw = sz.x + 16;

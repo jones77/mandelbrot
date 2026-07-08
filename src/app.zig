@@ -10,7 +10,7 @@ const allocator = @import("allocator.zig");
 
 const DEFAULT_W: i32 = 900;
 const MAX_HISTORY: usize = 64;
-const VIEW_FMT = "x={d:.8} y={d:.8} range={e:.8} iters={d}";
+const VIEW_FMT = "x={e:.16} y={e:.16} range={e:.8} iters={d}";
 
 // In app.zig to avoid circular type deps with input.zig
 const DragState = struct { start_x: f64, start_y: f64, current_x: f64, current_y: f64, active: bool };
@@ -328,6 +328,7 @@ pub const App = struct {
         };
         try self.captureAnimationFrame();
         self.view = to_view;
+        std.debug.print("x={e:.16} y={e:.16} range={e:.8} iters={d}\n", .{ delta.center_x + delta.offset_x, delta.center_y + delta.offset_y, new_range, self.view.max_iters });
         _ = try self.renderFresh(true);
         self.anim.from_view = from_view;
         self.anim.to_view = to_view;
@@ -363,6 +364,7 @@ pub const App = struct {
             _ = try self.renderFresh(true);
         }
         self.view = to_view;
+        std.debug.print("x={e:.16} y={e:.16} range={e:.8} iters={d}\n", .{ to_view.center_x + to_view.offset_x, to_view.center_y + to_view.offset_y, to_view.range, to_view.max_iters });
         self.syncTextBox();
     }
 
@@ -422,7 +424,7 @@ pub const App = struct {
         }
     }
 
-    pub fn syncTextBox(self: *App) void { self.tb_buf.format(VIEW_FMT, .{ self.view.center_x, self.view.center_y, self.view.range, self.view.max_iters }); }
+    pub fn syncTextBox(self: *App) void { self.tb_buf.format(VIEW_FMT, .{ self.view.center_x + self.view.offset_x, self.view.center_y + self.view.offset_y, self.view.range, self.view.max_iters }); }
 
     pub fn isValidCoord(parsed: m.ViewState) bool {
         return parsed.center_x >= m.INITIAL_CENTER_X - m.INITIAL_RANGE / 2.0 and parsed.center_x <= m.INITIAL_CENTER_X + m.INITIAL_RANGE / 2.0 and
@@ -514,7 +516,7 @@ pub const App = struct {
         if (self.render_timed_out) {
             const msg = "[Space]: continue";
             const mw = rl.measureText(msg, 18);
-            rl.drawText(msg, self.render_w - ui.TOP_PAD - mw, ui.LINE1_H + ui.HINT_PAD_Y, 18, ui.COL_TIMEOUT);
+            rl.drawText(msg, self.render_w - ui.TOP_PAD - mw, ui.LINE1_H + ui.LINE2_H + ui.HINT_PAD_Y, 18, ui.COL_TIMEOUT);
         }
     }
 };

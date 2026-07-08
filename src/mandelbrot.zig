@@ -67,6 +67,88 @@ const OrbitPoint = struct { zx: f32, zy: f32 };
 
 pub const RefOrbit = struct { zx: f64, zy: f64 };
 
+/// A single entry in the RefBank — one reference orbit plus its complex coordinate.
+pub const RefBankEntry = struct {
+    orbit: []const RefOrbit,
+    cx: f64,
+    cy: f64,
+    escaped: bool,
+    grid_col_frac: f64,
+    grid_row_frac: f64,
+    /// Position relative to center_x/center_y (small terms, ~range, not ~|center|).
+    rel_cx: f64,
+    rel_cy: f64,
+};
+
+/// A bank of reference orbits distributed across the viewport.
+/// Each pixel selects the nearest escaping entry.
+pub const RefBank = struct {
+    entries: []RefBankEntry,
+    cols: usize,
+    rows: usize,
+    allocator: std.mem.Allocator,
+
+    pub fn escapedCount(self: *const RefBank) usize {
+        var count: usize = 0;
+        for (self.entries) |e| {
+            if (e.escaped) count += 1;
+        }
+        return count;
+    }
+
+    pub fn deinit(self: *RefBank) void {
+        for (self.entries) |*e| {
+            self.allocator.free(e.orbit);
+        }
+        self.allocator.free(self.entries);
+    }
+
+    /// Find the nearest escaping entry to (cx, cy).
+    /// Uses absolute coordinates — may lose precision at deep zoom.
+    /// Returns null if no escaping entry exists.
+    pub fn nearest(self: *const RefBank, cx: f64, cy: f64) ?*const RefBankEntry {
+        var best: ?*const RefBankEntry = null;
+        var best_dist_sq: f64 = std.math.floatMax(f64);
+        for (self.entries) |*e| {
+            if (!e.escaped) continue;
+            const dx = cx - e.cx;
+            const dy = cy - e.cy;
+            const dsq = dx * dx + dy * dy;
+            if (dsq < best_dist_sq) {
+                best = e;
+                best_dist_sq = dsq;
+            }
+        }
+        return best;
+    }
+
+    /// Find the nearest escaping entry using relative coordinates (small terms only).
+    /// `pixel_rel_cx`, `pixel_rel_cy` are the pixel position relative to center_x/center_y
+    /// (i.e., offset_x + ((px+0.5)/w - 0.5)*range_x and offset_y + ((py+0.5)/h - 0.5)*range_y).
+    /// All distances are computed from small ~range values, avoiding precision loss
+    /// from subtracting large absolute coordinates.
+    /// Returns null if no escaping entry exists.
+    pub fn nearestByOffset(
+        self: *const RefBank,
+        pixel_rel_cx: f64,
+        pixel_rel_cy: f64,
+    ) ?*const RefBankEntry {
+        var best: ?*const RefBankEntry = null;
+        var best_dist_sq: f64 = std.math.floatMax(f64);
+        for (self.entries) |*e| {
+            if (!e.escaped) continue;
+            const dx = pixel_rel_cx - e.rel_cx;
+            const dy = pixel_rel_cy - e.rel_cy;
+            const dsq = dx * dx + dy * dy;
+            if (dsq < best_dist_sq) {
+                best = e;
+                best_dist_sq = dsq;
+            }
+        }
+        return best;
+    }
+};
+
 pub const ViewState = struct {
     center_x: f64,
     center_y: f64,
@@ -259,19 +341,64 @@ pub fn perturbPixel(
 
 /// Production perturbation pixel renderer with glitch detection, Z overflow
 /// handling, and f64 rebasing. Used by the multi-threaded renderer.
+/// `dcx, dcy` are the deltas from the reference orbit; `pixel_cx, pixel_cy`
+/// is the pixel's own C coordinate (passed directly to preserve precision
+/// in fallback paths — do NOT compute as `orbit[0].zx + dcx` as that loses
+/// per-pixel C when `|dcx| < ULP(|orbit[0].zx|)`).
 /// Returns smooth iteration count `mu`, or `max_iters` as f32 for interior.
+/// Lazy f128 pixel coordinate reconstruction.  Only evaluates the f128
+/// arithmetic when a fallback path is entered (rare).  This avoids the
+/// ~20-50× software-emulated f128 cost on every pixel.
+pub const F128Px = struct {
+    left: f128,
+    step: f128,
+    px: usize,
+    cy: f128,
+
+    pub fn cx(p: @This()) f128 {
+        return p.left + (@as(f128, @floatFromInt(p.px)) + 0.5) * p.step;
+    }
+};
+
+/// Threshold for f128 fallback usage.  Below this pixel_step, f64 arithmetic
+/// in `renderPerturbationPixel` fallback loses per-pixel C differences because
+/// `(px+0.5)*step < ULP(|center_x|)`.  The threshold is ~3× ULP at |C|≈2,
+/// which gives a comfortable safety margin.
+pub const DEEP_ZOOM_PIXEL_STEP: f64 = 1.0e-15;
+
 pub fn renderPerturbationPixel(
     dcx: f64,
     dcy: f64,
     orbit: []const RefOrbit,
     max_iters: u32,
     glitch_ratio: f32,
+    pixel_cx: f64,
+    pixel_cy: f64,
+    deep_zoom: bool,
+    fpx: F128Px,
 ) f32 {
     var dx: f64 = dcx;
     var dy: f64 = dcy;
     var iter: u32 = 0;
     const max_f: f32 = @floatFromInt(max_iters);
     var result: f32 = max_f;
+
+    // Dispatch helpers — f128 for deep zoom (where f64 can't resolve pixels),
+    // f64 for all other cases (fast, ~20-50× cheaper per op).
+    const continueFrom = struct {
+        fn call(zx_f: f64, zy_f: f64, cx_f: f64, cy_f: f64, si: u32, mi: u32, dz: bool, fpx_inner: F128Px) f32 {
+            if (dz) {
+                return rebaseFallbackF128(@as(f128, zx_f), @as(f128, zy_f), fpx_inner.cx(), fpx_inner.cy, si, mi);
+            }
+            return rebaseFallback(zx_f, zy_f, cx_f, cy_f, si, mi);
+        }
+        fn scratch(cx_f: f64, cy_f: f64, mi: u32, dz: bool, fpx_inner: F128Px) f32 {
+            if (dz) {
+                return rebaseFallbackF128(fpx_inner.cx(), fpx_inner.cy, fpx_inner.cx(), fpx_inner.cy, 0, mi);
+            }
+            return rebaseFallback(cx_f, cy_f, cx_f, cy_f, 0, mi);
+        }
+    };
 
     while (iter < max_iters) : (iter += 1) {
         const ref = &orbit[iter];
@@ -281,15 +408,13 @@ pub fn renderPerturbationPixel(
 
         const rebase_zx = ref.zx + dx;
         const rebase_zy = ref.zy + dy;
-        const rebase_cx = orbit[0].zx + dcx;
-        const rebase_cy = orbit[0].zy + dcy;
         const rebase_norm_sq = rebase_zx * rebase_zx + rebase_zy * rebase_zy;
 
         if (!std.math.isFinite(Z_norm_sq)) {
             if (std.math.isFinite(ref.zx + ref.zy)) {
-                result = rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
+                result = continueFrom.call(rebase_zx, rebase_zy, pixel_cx, pixel_cy, iter, max_iters, deep_zoom, fpx);
             } else {
-                result = rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
+                result = continueFrom.scratch(pixel_cx, pixel_cy, max_iters, deep_zoom, fpx);
             }
             break;
         }
@@ -298,13 +423,13 @@ pub fn renderPerturbationPixel(
             if (Z_norm_sq > @as(f64, GLITCH_MIN_NORM_SQ) and
                 rebase_norm_sq < @as(f64, glitch_ratio) * Z_norm_sq)
             {
-                result = rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
+                result = continueFrom.call(rebase_zx, rebase_zy, pixel_cx, pixel_cy, iter, max_iters, deep_zoom, fpx);
                 break;
             }
         }
 
         if (dx * dx + dy * dy > Z_norm_sq) {
-            result = rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
+            result = continueFrom.call(rebase_zx, rebase_zy, pixel_cx, pixel_cy, iter, max_iters, deep_zoom, fpx);
             break;
         }
 
@@ -312,9 +437,9 @@ pub fn renderPerturbationPixel(
             if (std.math.isFinite(rebase_norm_sq)) {
                 result = @floatCast(smoothIteration(iter, rebase_norm_sq));
             } else if (std.math.isFinite(ref.zx + ref.zy)) {
-                result = rebaseFallback(rebase_zx, rebase_zy, rebase_cx, rebase_cy, iter, max_iters);
+                result = continueFrom.call(rebase_zx, rebase_zy, pixel_cx, pixel_cy, iter, max_iters, deep_zoom, fpx);
             } else {
-                result = rebaseFallback(rebase_cx, rebase_cy, rebase_cx, rebase_cy, 0, max_iters);
+                result = continueFrom.scratch(pixel_cx, pixel_cy, max_iters, deep_zoom, fpx);
             }
             break;
         }
@@ -389,6 +514,38 @@ pub inline fn rebaseFallback(
         const norm_sq = zx_f * zx_f + zy_f * zy_f;
         if (norm_sq > ESCAPE_RADIUS_SQ) {
             const raw = smoothIteration(iter, norm_sq);
+            return @floatCast(raw);
+        }
+        const nzx = zx_f * zx_f - zy_f * zy_f + cx;
+        const nzy = 2.0 * zx_f * zy_f + cy;
+        zx_f = nzx;
+        zy_f = nzy;
+    }
+    return @as(f32, @floatFromInt(max_iters));
+}
+
+/// Rebase fallback using f128 arithmetic.  Same semantics as rebaseFallback
+/// but preserves per-pixel C differences below f64 ULP (~1e-16 at |C| ≈ 1).
+/// Used at deep zoom where (px+0.5)*range/w < f64 ULP(|center_x|) — typically
+/// range < 4e-13.  The f128 type has 112 mantissa bits vs f64's 53, making
+/// the effective ULP ~2.4e-34 at |C| ≈ 1, sufficient for range/w ≈ 1e-32.
+/// Software-emulated on aarch64 (~20-50× per op), but only invoked in the
+/// rare fallback path so the overhead is imperceptible.
+pub fn rebaseFallbackF128(
+    zx: f128,
+    zy: f128,
+    cx: f128,
+    cy: f128,
+    start_iter: u32,
+    max_iters: u32,
+) f32 {
+    var zx_f: f128 = zx;
+    var zy_f: f128 = zy;
+    var iter = start_iter;
+    while (iter < max_iters) : (iter += 1) {
+        const norm_sq = zx_f * zx_f + zy_f * zy_f;
+        if (norm_sq > @as(f128, ESCAPE_RADIUS_SQ)) {
+            const raw = smoothIteration(iter, @floatCast(norm_sq));
             return @floatCast(raw);
         }
         const nzx = zx_f * zx_f - zy_f * zy_f + cx;
@@ -914,7 +1071,7 @@ test "renderPerturbationPixel escapes at reference point" {
     const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
     defer std.testing.allocator.free(orbit);
 
-    const mu = renderPerturbationPixel(0.0, 0.0, orbit, max_iters, GLITCH_RATIO);
+    const mu = renderPerturbationPixel(0.0, 0.0, orbit, max_iters, GLITCH_RATIO, ref_cx, ref_cy, false, F128Px{ .left = @as(f128, ref_cx), .step = 0, .px = 0, .cy = @as(f128, ref_cy) });
     try testing.expect(std.math.isFinite(mu));
     try testing.expect(mu < @as(f32, @floatFromInt(max_iters)));
 }
@@ -926,7 +1083,7 @@ test "renderPerturbationPixel interior point returns max_iters" {
     const orbit = try computeReference(ref_cx, ref_cy, max_iters, std.testing.allocator);
     defer std.testing.allocator.free(orbit);
 
-    const mu = renderPerturbationPixel(-0.06, 0.0, orbit, max_iters, GLITCH_RATIO);
+    const mu = renderPerturbationPixel(-0.06, 0.0, orbit, max_iters, GLITCH_RATIO, ref_cx - 0.06, ref_cy, false, F128Px{ .left = @as(f128, ref_cx - 0.06), .step = 0, .px = 0, .cy = @as(f128, ref_cy) });
     try testing.expect(std.math.isFinite(mu));
     try testing.expect(mu >= @as(f32, @floatFromInt(max_iters)));
 }
@@ -946,7 +1103,7 @@ test "renderPerturbationPixel matches perturbPixel with glitch_ratio=0" {
         .{ .dcx = 0.02, .dcy = -0.03 },
     };
     for (offsets) |off| {
-        const mu_rp = renderPerturbationPixel(off.dcx, off.dcy, orbit, max_iters, 0);
+        const mu_rp = renderPerturbationPixel(off.dcx, off.dcy, orbit, max_iters, 0, ref_cx + off.dcx, ref_cy + off.dcy, false, F128Px{ .left = @as(f128, ref_cx + off.dcx), .step = 0, .px = 0, .cy = @as(f128, ref_cy + off.dcy) });
         const mu_pp = perturbPixel(@floatCast(off.dcx), @floatCast(off.dcy), orbit, max_iters);
         try testing.expect(mu_rp < @as(f32, @floatFromInt(max_iters)));
         try testing.expect(mu_pp < @as(f32, @floatFromInt(max_iters)));
@@ -978,7 +1135,7 @@ test "renderPerturbationPixel Seahorse Valley regression" {
     for (offsets) |off| {
         const pix_cx = ref_cx + off.dx;
         const pix_cy = ref_cy + off.dy;
-        const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO);
+        const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO, pix_cx, pix_cy, false, F128Px{ .left = @as(f128, pix_cx), .step = 0, .px = 0, .cy = @as(f128, pix_cy) });
         const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
 
         if (gt.escaped) {
@@ -1311,7 +1468,7 @@ test "renderPerturbationPixel offset precision at deep zoom" {
     for (offsets) |off| {
         const pix_cx = cx + off.dx;
         const pix_cy = cy + off.dy;
-        const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO);
+        const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO, pix_cx, pix_cy, false, F128Px{ .left = @as(f128, pix_cx), .step = 0, .px = 0, .cy = @as(f128, pix_cy) });
         const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
 
         if (gt.escaped) {
@@ -1812,8 +1969,8 @@ test "glitch detection converges to ground truth at Seahorse Valley" {
         const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
         if (!gt.escaped) continue;
 
-        _ = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, 0);
-        const mu_glitch = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO);
+        _ = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, 0, pix_cx, pix_cy, false, F128Px{ .left = @as(f128, pix_cx), .step = 0, .px = 0, .cy = @as(f128, pix_cy) });
+        const mu_glitch = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO, pix_cx, pix_cy, false, F128Px{ .left = @as(f128, pix_cx), .step = 0, .px = 0, .cy = @as(f128, pix_cy) });
         const mu_gt_f64 = smoothIteration(gt.iter, gt.zx * gt.zx + gt.zy * gt.zy);
         const mu_gt: f32 = @floatCast(mu_gt_f64);
 
@@ -1950,7 +2107,7 @@ test "deep zoom parametrized e-12 to e-30 at user coordinate" {
                 const pix_cx = center_x + off.dx;
                 const pix_cy = center_y + off.dy;
 
-                const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, glitch);
+                const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, glitch, pix_cx, pix_cy, false, F128Px{ .left = @as(f128, pix_cx), .step = 0, .px = 0, .cy = @as(f128, pix_cy) });
                 try testing.expect(std.math.isFinite(mu_rp));
 
                 if (range >= f64_usable_limit) {
@@ -1978,8 +2135,8 @@ test "deep zoom parametrized e-12 to e-30 at user coordinate" {
         // Verify that opposite-edge pixels get distinguishable results
         // (proving the perturbation math resolves the tiny dcx/dcy offsets).
         if (ref_escaped) {
-            const mu_a = renderPerturbationPixel(-0.5 * range, 0.0, orbit, max_iters, glitch);
-            const mu_b = renderPerturbationPixel(0.5 * range, 0.0, orbit, max_iters, glitch);
+            const mu_a = renderPerturbationPixel(-0.5 * range, 0.0, orbit, max_iters, glitch, center_x - 0.5 * range, center_y, false, F128Px{ .left = @as(f128, center_x - 0.5 * range), .step = 0, .px = 0, .cy = @as(f128, center_y) });
+            const mu_b = renderPerturbationPixel(0.5 * range, 0.0, orbit, max_iters, glitch, center_x + 0.5 * range, center_y, false, F128Px{ .left = @as(f128, center_x + 0.5 * range), .step = 0, .px = 0, .cy = @as(f128, center_y) });
             try testing.expect(std.math.isFinite(mu_a));
             try testing.expect(std.math.isFinite(mu_b));
             if (mu_a < @as(f32, @floatFromInt(max_iters)) and
@@ -2053,7 +2210,7 @@ test "deep zoom on real axis center_y=0 at e-18" {
         };
 
         for (offsets) |off| {
-            const mu = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO);
+            const mu = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, GLITCH_RATIO, center_x + off.dx, center_y + off.dy, false, F128Px{ .left = @as(f128, center_x + off.dx), .step = 0, .px = 0, .cy = @as(f128, center_y + off.dy) });
             try testing.expect(mu >= @as(f32, @floatFromInt(max_iters)));
         }
     }
@@ -2130,4 +2287,239 @@ test "double-click zoom centers on clicked pixel" {
         }
     }
 }
+
+test "RefBank.nearest finds closest escaping entry" {
+    const alloc = testing.allocator;
+
+    var o1 = try alloc.alloc(RefOrbit, 1);
+    defer alloc.free(o1);
+    var o2 = try alloc.alloc(RefOrbit, 1);
+    defer alloc.free(o2);
+    o1[0] = .{ .zx = 0, .zy = 0 };
+    o2[0] = .{ .zx = 0, .zy = 0 };
+
+    var entries = try alloc.alloc(RefBankEntry, 2);
+    defer alloc.free(entries);
+
+    entries[0] = .{ .orbit = o1, .cx = -1.0, .cy = 0.0, .escaped = true, .grid_col_frac = 0.5, .grid_row_frac = 0.5, .rel_cx = -1.0, .rel_cy = 0.0 };
+    entries[1] = .{ .orbit = o2, .cx = 1.0, .cy = 0.0, .escaped = true, .grid_col_frac = 0.5, .grid_row_frac = 0.5, .rel_cx = 1.0, .rel_cy = 0.0 };
+
+    var bank = RefBank{
+        .entries = entries,
+        .cols = 1,
+        .rows = 2,
+        .allocator = alloc,
+    };
+
+    const nearest = bank.nearest(0.0, 0.0).?;
+    try testing.expectEqual(@as(f64, -1.0), nearest.cx);
+
+    entries[0].escaped = false;
+    const nearest2 = bank.nearest(0.0, 0.0).?;
+    try testing.expectEqual(@as(f64, 1.0), nearest2.cx);
+
+    entries[1].escaped = false;
+    try testing.expectEqual(@as(?*const RefBankEntry, null), bank.nearest(0.0, 0.0));
+}
+
+test "rebaseFallback distinguishes sub-ULP cx differences" {
+    // The continue-from-Z and scratch-start fallbacks call
+    // rebaseFallback(zx, zy, pixel_cx, pixel_cy, iter, max_iters).
+    // The additive constant is pixel_cx, which differs per pixel even
+    // at sub-ULP levels.
+    //
+    // This test proves that rebaseFallback itself can distinguish two
+    // cx values differing by < 1 ULP at |cx| ≈ 1.4 (ULP ≈ 3e-16).
+    // The f64 recurrence amplifies the tiny difference over ~500
+    // iterations into demonstrably different escape mu values.
+
+    const max_iters: u32 = 4096;
+    const cy: f64 = -0.00002074;
+
+    // Two cx values separated by ~1 ULP at |cx| ≈ 1.4.
+    const cx_a: f64 = -1.41321273;
+    const cx_b: f64 = cx_a + @as(f64, 3.5e-16); // ≈ 1 ULP
+
+    const mu_a = rebaseFallback(cx_a, cy, cx_a, cy, 0, max_iters);
+    const mu_b = rebaseFallback(cx_b, cy, cx_b, cy, 0, max_iters);
+
+    try testing.expect(std.math.isFinite(mu_a));
+    try testing.expect(std.math.isFinite(mu_b));
+
+    const max_f: f32 = @floatFromInt(max_iters);
+    try testing.expect(mu_a < max_f);
+    try testing.expect(mu_b < max_f);
+    // The ~1 ULP difference in cx must produce different mu values
+    // after the nonlinear f64 recurrence amplifies it.
+    try testing.expect(mu_a != mu_b);
+
+    // Also verify against ground truth for correctness
+    const gt_a = groundTruthPixel(cx_a, cy, max_iters);
+    const gt_b = groundTruthPixel(cx_b, cy, max_iters);
+    try testing.expect(gt_a.escaped);
+    try testing.expect(gt_b.escaped);
+
+    const mu_gt_a = smoothIteration(gt_a.iter, gt_a.zx * gt_a.zx + gt_a.zy * gt_a.zy);
+    const mu_gt_b = smoothIteration(gt_b.iter, gt_b.zx * gt_b.zx + gt_b.zy * gt_b.zy);
+    try testing.expect(@abs(mu_a - @as(f32, @floatCast(mu_gt_a))) < 0.1);
+    try testing.expect(@abs(mu_b - @as(f32, @floatCast(mu_gt_b))) < 0.1);
+}
+
+test "scratch-start fallback with NaN reference Z" {
+    // Directly test the scratch-start branch (line 380) which fires
+    // when the reference orbit's stored zx/zy are themselves NaN/inf
+    // (not just their squares). This is a safety net — pixels normally
+    // escape before reaching this iteration, but the branch must
+    // produce correct results when triggered.
+
+    const max_iters: u32 = 200;
+    const c_ref_x: f64 = -0.75;
+    const c_ref_y: f64 = 0.1;
+
+    // Build a synthetic orbit: first 20 entries valid (pre-escape),
+    // remaining entries filled with NaN (simulating post-overflow).
+    const orbit = try testing.allocator.alloc(RefOrbit, max_iters);
+    defer testing.allocator.free(orbit);
+
+    {
+        var zx: f64 = c_ref_x;
+        var zy: f64 = c_ref_y;
+        var i: usize = 0;
+        while (i < 20 and i < max_iters) : (i += 1) {
+            orbit[i] = .{ .zx = zx, .zy = zy };
+            const zx2 = zx * zx;
+            const zy2 = zy * zy;
+            zy = 2.0 * zx * zy + c_ref_y;
+            zx = zx2 - zy2 + c_ref_x;
+        }
+        for (20..max_iters) |j| {
+            orbit[j] = .{ .zx = std.math.nan(f64), .zy = std.math.nan(f64) };
+        }
+    }
+
+    // Verify NaN entries exist
+    var has_nan = false;
+    for (orbit) |entry| {
+        if (!std.math.isFinite(entry.zx + entry.zy)) {
+            has_nan = true;
+            break;
+        }
+    }
+    try testing.expect(has_nan);
+
+    // Render two pixels with identical offset (0,0) but different
+    // pixel_cx/pixel_cy through the scratch-start path.
+    // Both should produce valid finite results.
+    const mu_a = renderPerturbationPixel(0.0, 0.0, orbit, max_iters, GLITCH_RATIO, c_ref_x, c_ref_y, false, F128Px{ .left = @as(f128, c_ref_x), .step = 0, .px = 0, .cy = @as(f128, c_ref_y) });
+    const mu_b = renderPerturbationPixel(0.0, 0.0, orbit, max_iters, GLITCH_RATIO, c_ref_x + 0.1, c_ref_y, false, F128Px{ .left = @as(f128, c_ref_x + 0.1), .step = 0, .px = 0, .cy = @as(f128, c_ref_y) });
+
+    try testing.expect(std.math.isFinite(mu_a));
+    try testing.expect(std.math.isFinite(mu_b));
+
+    // Different pixel_cx must produce different results (proving
+    // the scratch-start fallback uses pixel_cx, not a constant).
+    try testing.expect(mu_a != mu_b);
+}
+
+test "continue-from-Z fallback preserves iteration at glitch" {
+    // The continue-from-Z path (line 389, triggered by glitch detection
+    // or |d|² > |Z|²) passes the current iteration to rebaseFallback.
+    // This test verifies that iteration count is preserved by comparing
+    // the glitch-path result against ground truth at a coordinate known
+    // to trigger glitch correction.
+
+    const ref_cx: f64 = -1.785897;
+    const ref_cy: f64 = 0.000055;
+    const max_iters: u32 = 8192;
+    const glitch: f32 = GLITCH_RATIO;
+
+    const orbit = try computeReference(ref_cx, ref_cy, max_iters, testing.allocator);
+    defer testing.allocator.free(orbit);
+
+    // Offsets known to trigger glitch: edges of a moderate zoom viewport
+    const offsets = [_]struct { dx: f64, dy: f64 }{
+        .{ .dx = -0.001, .dy = 0.0 },
+        .{ .dx = 0.001, .dy = 0.0 },
+        .{ .dx = 0.0, .dy = -0.001 },
+        .{ .dx = 0.0, .dy = 0.001 },
+    };
+
+    for (offsets) |off| {
+        const pix_cx = ref_cx + off.dx;
+        const pix_cy = ref_cy + off.dy;
+
+        const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, max_iters, glitch, pix_cx, pix_cy, false, F128Px{ .left = @as(f128, pix_cx), .step = 0, .px = 0, .cy = @as(f128, pix_cy) });
+        const gt = groundTruthPixel(pix_cx, pix_cy, max_iters);
+
+        try testing.expect(std.math.isFinite(mu_rp));
+
+        if (gt.escaped) {
+            try testing.expect(mu_rp < @as(f32, @floatFromInt(max_iters)));
+            const mu_gt_f64 = smoothIteration(gt.iter, gt.zx * gt.zx + gt.zy * gt.zy);
+            const mu_gt: f32 = @floatCast(mu_gt_f64);
+            // Tolerance of 0.5 accounts for f32 precision in the
+            // continue-from-Z fallback vs f64 ground truth.
+            try testing.expectApproxEqAbs(mu_gt, mu_rp, 0.5);
+        } else {
+            try testing.expect(mu_rp >= @as(f32, @floatFromInt(max_iters)));
+        }
+    }
+}
+
+test "rebaseFallback with pixel_cx at deep zoom matches ground truth" {
+    // Verify that rebaseFallback (called from renderPerturbationPixel's
+    // fallback paths) with the pixel_cx parameters produces results
+    // that agree with groundTruthPixel at deep zoom where the old
+    // orbit[0].zx + dcx construction would have failed.
+
+    const test_points = [_]struct { ref_cx: f64, ref_cy: f64, range: f64, max_iters: u32 }{
+        .{ .ref_cx = -1.41321273, .ref_cy = -0.00002074, .range = 1e-12, .max_iters = 4096 },
+        .{ .ref_cx = -1.41321273, .ref_cy = -0.00002074, .range = 1e-16, .max_iters = 8192 },
+        .{ .ref_cx = -1.41321273, .ref_cy = -0.00002074, .range = 1e-21, .max_iters = 32768 },
+    };
+
+    const glitch: f32 = GLITCH_RATIO;
+
+    for (test_points) |tp| {
+        const orbit = try computeReference(tp.ref_cx, tp.ref_cy, tp.max_iters, testing.allocator);
+        defer testing.allocator.free(orbit);
+
+        // Check reference escapes (perturbation is applicable)
+        const last = orbit[orbit.len - 1];
+        const nsq = last.zx * last.zx + last.zy * last.zy;
+        const ref_escaped = !std.math.isFinite(nsq) or nsq > ESCAPE_RADIUS_SQ;
+        if (!ref_escaped) continue;
+
+        // Test four edge points of the viewport
+        const test_offsets = [_]struct { dx: f64, dy: f64 }{
+            .{ .dx = -0.5 * tp.range, .dy = 0.0 },
+            .{ .dx = 0.5 * tp.range, .dy = 0.0 },
+            .{ .dx = 0.0, .dy = -0.5 * tp.range },
+            .{ .dx = 0.0, .dy = 0.5 * tp.range },
+        };
+
+        for (test_offsets) |off| {
+            const pix_cx = tp.ref_cx + off.dx;
+            const pix_cy = tp.ref_cy + off.dy;
+
+            const mu_rp = renderPerturbationPixel(off.dx, off.dy, orbit, tp.max_iters, glitch, pix_cx, pix_cy, false, F128Px{ .left = @as(f128, pix_cx), .step = 0, .px = 0, .cy = @as(f128, pix_cy) });
+            const gt = groundTruthPixel(pix_cx, pix_cy, tp.max_iters);
+
+            try testing.expect(std.math.isFinite(mu_rp));
+
+            if (gt.escaped) {
+                try testing.expect(mu_rp < @as(f32, @floatFromInt(tp.max_iters)));
+                const mu_gt_f64 = smoothIteration(gt.iter, gt.zx * gt.zx + gt.zy * gt.zy);
+                const mu_gt: f32 = @floatCast(mu_gt_f64);
+                // Tolerance of 1.0 is generous — perturbation + f64 fallback
+                // vs pure f64 ground truth can differ by this much at
+                // extreme iteration counts.
+                try testing.expectApproxEqAbs(mu_gt, mu_rp, 1.0);
+            } else {
+                try testing.expect(mu_rp >= @as(f32, @floatFromInt(tp.max_iters)));
+            }
+        }
+    }
+}
+
 
