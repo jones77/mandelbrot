@@ -126,6 +126,7 @@ pub const App = struct {
     btn_w_copy: f32,
     btn_w_paste: f32,
     btn_w_reset: f32,
+    btn_w_iterations_label: f32,
     tooltip_enabled: bool,
     tooltip_label_w: f32,
     tooltip_mouse_still_since: f64,
@@ -184,6 +185,7 @@ pub const App = struct {
             .btn_w_copy = undefined,
             .btn_w_paste = undefined,
             .btn_w_reset = undefined,
+            .btn_w_iterations_label = undefined,
             .tooltip_enabled = tooltip_enabled,
             .tooltip_label_w = undefined,
             .tooltip_mouse_still_since = 0,
@@ -219,6 +221,7 @@ pub const App = struct {
         app.btn_w_copy = rl.measureTextEx(app.ui_font, "copy", @floatFromInt(ui.FONT_SIZE_BTN), 0).x;
         app.btn_w_paste = rl.measureTextEx(app.ui_font, "paste", @floatFromInt(ui.FONT_SIZE_BTN), 0).x;
         app.btn_w_reset = rl.measureTextEx(app.ui_font, "reset", @floatFromInt(ui.FONT_SIZE_BTN), 0).x;
+        app.btn_w_iterations_label = rl.measureTextEx(app.ui_font, "iterations ", @floatFromInt(ui.FONT_SIZE_BTN), 0).x;
         app.tooltip_label_w = rl.measureTextEx(app.ui_font, ui.TOOLTIP_LABEL, ui.FONT_SIZE_LG, 1).x;
         app.tooltip_mouse_still_since = rl.getTime();
         app.syncTextBox();
@@ -504,14 +507,13 @@ pub const App = struct {
         const mx = rl.getMouseX();
         const my = rl.getMouseY();
 
-        ui.drawToolbar(self.ui_font, self.render_w, self.tb_active, &self.tb_buf, self.view, self.btn_w_inc, self.btn_w_dec, self.btn_w_copy, self.btn_w_paste, self.btn_w_reset, mx, my);
+        ui.drawToolbar(self.ui_font, self.render_w, self.tb_active, &self.tb_buf, self.view, self.btn_w_inc, self.btn_w_dec, self.btn_w_copy, self.btn_w_paste, self.btn_w_reset, self.btn_w_iterations_label, self.tooltip_enabled, self.tooltip_label_w, mx, my);
         if (self.drag.active) {
             const x0: f32 = @floatCast(@min(self.drag.start_x, self.drag.current_x));
             const y0: f32 = @floatCast(@min(self.drag.start_y, self.drag.current_y));
             const sz: f32 = @floatCast(@abs(self.drag.current_x - self.drag.start_x));
             if (sz >= 8.0) rl.drawRectangleLines(@intFromFloat(x0), @intFromFloat(y0), @intFromFloat(sz), @intFromFloat(sz), .{ .r = 255, .g = 30, .b = 30, .a = 200 });
         }
-        ui.drawTooltipCheckbox(self.ui_font, self.render_w, self.tooltip_enabled, self.tooltip_label_w, mx, my);
         ui.drawCoordinateTooltip(self.ui_font, self.render_w, self.render_h, self.dpi_scale, self.image.width, self.image.height, self.view, self.tooltip_enabled, &self.tooltip_mouse_still_since, &self.tooltip_last_mx, &self.tooltip_last_my, mx, my);
         if (self.render_timed_out) {
             const msg = "[Space]: continue";

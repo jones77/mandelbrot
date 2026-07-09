@@ -43,7 +43,7 @@ pub fn handleInput(self: *app.App) !void {
     if (in_top and rl.isMouseButtonPressed(.left)) {
         const tb_y: i32 = (LINE1_H - TB_H) / 2;
         const btn_y: i32 = LINE1_H + (LINE2_H - TB_H) / 2;
-        const tb = ui.ToolbarLayout.compute(self.render_w);
+        const tb = ui.ToolbarLayout.compute(self.render_w, @as(i32, @intFromFloat(self.btn_w_iterations_label)));
         const in_tb = mx >= tb.tb_start_x and mx < tb.tb_start_x + tb.tb_w and my >= tb_y and my < tb_y + TB_H;
         if (in_tb) {
             self.tb_active = true;
@@ -76,8 +76,8 @@ pub fn handleInput(self: *app.App) !void {
                 tb_click_consumed = true;
             }
             if (mx >= tb.reset_x and mx < tb.reset_x + ui.BTN_RESET and my >= btn_y and my < btn_y + TB_H) { try self.resetView(); tb_click_consumed = true; }
-            if (my >= LINE1_H + LINE2_H and my < TOTAL_TOP) {
-                const chk_x = self.render_w - TOP_PAD - @as(i32, @intFromFloat(self.tooltip_label_w));
+            if (my >= btn_y and my < btn_y + TB_H) {
+                const chk_x = self.render_w - TOP_PAD - @as(i32, @intFromFloat(self.tooltip_label_w)) - ui.CHK_SIZE - 4;
                 if (mx >= chk_x and mx < self.render_w - TOP_PAD) { self.tooltip_enabled = !self.tooltip_enabled; tb_click_consumed = true; }
             }
         }

@@ -4,13 +4,18 @@ An interactive Mandelbrot set explorer written in [Zig](https://ziglang.org/).
 
 ## Features
 
-- **1:1 box zoom** — click and drag a square selection to zoom in
-- **Animations** — animates zoom in and out
+- **Interactive viewer** — click-and-drag box zoom, scroll wheel, arrow-key undo/redo navigation
+- **Three render methods** — auto (adaptive), perturbation (glitch-corrected), and direct f64
+- **Deep zoom** — 128-bit float fallback resolves per-pixel coordinates down to range ≈1e-28
+- **Reference orbit bank** — 1×1 grid minimizes glitch artifacts; single-reference avoids Voronoi seams
+- **Cardioid/bulb pre-check** — O(1) interior detection, skips iteration for inside points
+- **Smooth zoom animations** — animated transitions between history states
+- **Coordinate display & clipboard** — view/edit coordinates in a textbox, copy/paste view state
+- **Interactive toolbar** — left/right history arrows, iterations inc/dec controls, copy/paste/reset buttons, toggleable coordinate tooltip
+- **Iteration control** — ± keys or toolbar buttons adjust detail; auto-scales on zoom
 - **Undo/redo** — ← to undo, → to redo (up to 64 levels, instant from pixel cache)
-- **Iteration control** — ± keys or on-screen buttons double/halve detail; auto-scales on zoom
-- **Reset** — press R to return to the default overview
-- **HUD** — shows current complex-plane coordinates, visible range, and iteration limit
-- **Cross-platform** — runs on macOS, Linux, and Windows 11 via raylib
+- **Render timeout** — configurable limit with Space-to-continue, returns partial results
+- **Cross-platform** — runs on macOS, Linux, and Windows via raylib; no platform-specific code
 
 ## Download
 

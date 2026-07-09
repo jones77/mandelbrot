@@ -1,0 +1,157 @@
+{
+  ".opencode/opencode.json": {
+    "mtime": 1783493848.872308,
+    "ast_hash": "e5f74d14a81702b55bdf53b33ec991d7",
+    "semantic_hash": "e5f74d14a81702b55bdf53b33ec991d7"
+  },
+  ".opencode/package.json": {
+    "mtime": 1783493852.461984,
+    "ast_hash": "9d3cdb0c223df9772b14e9af07b23c09",
+    "semantic_hash": "9d3cdb0c223df9772b14e9af07b23c09"
+  },
+  ".opencode/plugins/graphify.js": {
+    "mtime": 1783494122.3669515,
+    "ast_hash": "3ea725724bc8ebe483c9f13d6aa1124f",
+    "semantic_hash": "3ea725724bc8ebe483c9f13d6aa1124f"
+  },
+  "build.zig": {
+    "mtime": 1783219564.0082343,
+    "ast_hash": "c5251afa1cb908d598d8c5bb26235f84",
+    "semantic_hash": "c5251afa1cb908d598d8c5bb26235f84"
+  },
+  "src/allocator.zig": {
+    "mtime": 1783212277.754763,
+    "ast_hash": "6b78176d5e7e33dc0a337ce5461df072",
+    "semantic_hash": "6b78176d5e7e33dc0a337ce5461df072"
+  },
+  "src/app.zig": {
+    "mtime": 1783490330.7729669,
+    "ast_hash": "1090eb3074c8d1dc9e74381fda85855f",
+    "semantic_hash": "1090eb3074c8d1dc9e74381fda85855f"
+  },
+  "src/input.zig": {
+    "mtime": 1783490341.415188,
+    "ast_hash": "2ada5408fa4ef1202d740ab74577fe89",
+    "semantic_hash": "2ada5408fa4ef1202d740ab74577fe89"
+  },
+  "src/integration_tests.zig": {
+    "mtime": 1783491214.9457748,
+    "ast_hash": "2f5907d481a466109b24821c20f5b5cd",
+    "semantic_hash": "2f5907d481a466109b24821c20f5b5cd"
+  },
+  "src/log.zig": {
+    "mtime": 1783051898.0800393,
+    "ast_hash": "ebd15cf155ba8a033d62a742f02da88a",
+    "semantic_hash": "ebd15cf155ba8a033d62a742f02da88a"
+  },
+  "src/main.zig": {
+    "mtime": 1783385229.5016847,
+    "ast_hash": "fbdce406a2930c5fa81d1c9c0d580ee4",
+    "semantic_hash": "fbdce406a2930c5fa81d1c9c0d580ee4"
+  },
+  "src/mandelbrot.zig": {
+    "mtime": 1783491214.0322516,
+    "ast_hash": "f4ec6d3e7b6cc3969ab2509d61808cdb",
+    "semantic_hash": "f4ec6d3e7b6cc3969ab2509d61808cdb"
+  },
+  "src/pixel.zig": {
+    "mtime": 1783051894.097374,
+    "ast_hash": "e8506119c1a85bfedc0ae0bf9e1bf4c5",
+    "semantic_hash": "e8506119c1a85bfedc0ae0bf9e1bf4c5"
+  },
+  "src/refbank.zig": {
+    "mtime": 1783387860.7375016,
+    "ast_hash": "fe3967fa6baca6e2cd680be63284e181",
+    "semantic_hash": "fe3967fa6baca6e2cd680be63284e181"
+  },
+  "src/renderer.zig": {
+    "mtime": 1783490805.5108066,
+    "ast_hash": "282a1c85e7018ecb1a8dba03dc1052d4",
+    "semantic_hash": "282a1c85e7018ecb1a8dba03dc1052d4"
+  },
+  "src/test_runner.zig": {
+    "mtime": 1783287835.102825,
+    "ast_hash": "88caca3cc69b0c189ce396ff85d2aa8d",
+    "semantic_hash": "88caca3cc69b0c189ce396ff85d2aa8d"
+  },
+  "src/ui.zig": {
+    "mtime": 1783380260.4190469,
+    "ast_hash": "6131481b0651d6c1b8b4b8621c2d5b70",
+    "semantic_hash": "6131481b0651d6c1b8b4b8621c2d5b70"
+  },
+  ".opencode/skills/graphify/SKILL.md": {
+    "mtime": 1783494068.2164702,
+    "ast_hash": "6813c700990a14a0a82bf87c66e5f3d4",
+    "semantic_hash": "6813c700990a14a0a82bf87c66e5f3d4"
+  },
+  ".opencode/skills/graphify/references/add-watch.md": {
+    "mtime": 1783493357.5172942,
+    "ast_hash": "d59d027fe449f06aa03905a01184e779",
+    "semantic_hash": "d59d027fe449f06aa03905a01184e779"
+  },
+  ".opencode/skills/graphify/references/exports.md": {
+    "mtime": 1783493357.5174646,
+    "ast_hash": "9da2a2152e60a22f07f05fed5158f287",
+    "semantic_hash": "9da2a2152e60a22f07f05fed5158f287"
+  },
+  ".opencode/skills/graphify/references/extraction-spec.md": {
+    "mtime": 1783493357.5176642,
+    "ast_hash": "42fef56a01698118f7fd722acdadea34",
+    "semantic_hash": "42fef56a01698118f7fd722acdadea34"
+  },
+  ".opencode/skills/graphify/references/github-and-merge.md": {
+    "mtime": 1783493357.5179312,
+    "ast_hash": "cde13df085e4c492aeb7ba298a996d0d",
+    "semantic_hash": "cde13df085e4c492aeb7ba298a996d0d"
+  },
+  ".opencode/skills/graphify/references/hooks.md": {
+    "mtime": 1783493357.518168,
+    "ast_hash": "3f545db6ce646650bb9de588f5512a27",
+    "semantic_hash": "3f545db6ce646650bb9de588f5512a27"
+  },
+  ".opencode/skills/graphify/references/query.md": {
+    "mtime": 1783493357.5183992,
+    "ast_hash": "3c46f8ad006874260614ed8657d02307",
+    "semantic_hash": "3c46f8ad006874260614ed8657d02307"
+  },
+  ".opencode/skills/graphify/references/transcribe.md": {
+    "mtime": 1783493357.5188208,
+    "ast_hash": "67b6a5fa6c0974e18f60db9f8932fbd8",
+    "semantic_hash": "67b6a5fa6c0974e18f60db9f8932fbd8"
+  },
+  ".opencode/skills/graphify/references/update.md": {
+    "mtime": 1783493357.5191598,
+    "ast_hash": "c698309979460d0f02ba616417844399",
+    "semantic_hash": "c698309979460d0f02ba616417844399"
+  },
+  "AGENTS.md": {
+    "mtime": 1783493754.4116445,
+    "ast_hash": "028c1a239d5fb95493b1f55707345067",
+    "semantic_hash": "028c1a239d5fb95493b1f55707345067"
+  },
+  "README.md": {
+    "mtime": 1783050173.178941,
+    "ast_hash": "6fbd79053609699e0a5fa34ed7c35d76",
+    "semantic_hash": "6fbd79053609699e0a5fa34ed7c35d76"
+  },
+  "cheritat-algorithms.md": {
+    "mtime": 1782802716.6060164,
+    "ast_hash": "49c43d608264b93d0823353c2d0087e8",
+    "semantic_hash": "49c43d608264b93d0823353c2d0087e8"
+  },
+  "docs/superpowers/plans/2026-07-03-coordinate-tooltip.md": {
+    "mtime": 1783054053.5718558,
+    "ast_hash": "aa221f6ee75fddfaf92243bbd7ebaa31",
+    "semantic_hash": "aa221f6ee75fddfaf92243bbd7ebaa31"
+  },
+  "docs/superpowers/specs/2026-07-03-coordinate-tooltip-design.md": {
+    "mtime": 1783053871.8989148,
+    "ast_hash": "dde21e21a4aaf4fd2582a904c9965c0b",
+    "semantic_hash": "dde21e21a4aaf4fd2582a904c9965c0b"
+  },
+  "mathr-algorithms.md": {
+    "mtime": 1783275252.4203055,
+    "ast_hash": "29871c624c42c4a052b520b072946d46",
+    "semantic_hash": "29871c624c42c4a052b520b072946d46"
+  }
+}
