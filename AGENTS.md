@@ -256,6 +256,33 @@ See `docs/session-summary-2026-07-05.md` and `git log` for debugging history: ci
 
 ## graphify
 
+## Known issues
+
+### WSL: raylib crash at startup — `int dist` overflow in `GetCurrentMonitor`
+
+On WSL2, running the binary crashes with a signed integer overflow in raylib's
+`rcore_desktop_glfw.c:887`:
+
+```c
+int dist = (dx*dx) + (dy*dy);  // overflow when monitor coords are large
+```
+
+The GLFW X11 backend on WSL can report monitor positions with large absolute
+coordinates (e.g. from a virtual desktop spanning multiple monitors). When
+`dx` or `dy` exceed ~46340, `dx*dx` overflows a 32-bit signed `int`.
+
+**Where:** `zig-pkg/raylib-5.6.0-dev-.../src/platforms/rcore_desktop_glfw.c`,
+line 887 in `GetCurrentMonitor()`.
+
+**Workaround:** None in project code — this is a raylib bug.  The binary is
+still buildable (`zig build` exits 0); it just can't run under WSL without
+an X server that provides sensible monitor bounds.  On real Linux with a
+physical display the coordinates are small enough that overflow never occurs.
+
+**Fix upstream:** Change `int dist` to `long long dist` (or use `ll` suffix
+on the computation).  Not applied here because it's a vendored dependency
+and the user may re-fetch.
+
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
 When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.

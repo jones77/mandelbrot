@@ -203,6 +203,9 @@ sudo dnf install raylib-devel
 
 # Windows (vcpkg)
 vcpkg install raylib
+
+# Windows - WSL
+# Don't bother, see AGENTS.md for details.
 ```
 
 Then replace the `raylib_zig` dependency block in `build.zig` with:
